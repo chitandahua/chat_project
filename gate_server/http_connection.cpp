@@ -20,6 +20,7 @@ void HttpConnection::start() {
                      [self = shared_from_this()](const boost::system::error_code& ec,
                                                  std::size_t bytes_transferred) {
                          if (!ec) {
+                             // TODO
                              boost::ignore_unused(bytes_transferred);
                              self->handle_request();
                              self->check_deadline();
@@ -36,6 +37,8 @@ void HttpConnection::start() {
 }
 
 void HttpConnection::handle_request() {
+    std::cout << "receive request: " << request_.target() << "\n";
+
     response_.version(request_.version());
     // 短连接
     response_.keep_alive(false);
@@ -47,6 +50,8 @@ void HttpConnection::handle_request() {
             result = dispatcher_->handle_get_request(shared_from_this(), uri.value().path());
         } else if (request_.method() == http::verb::post) {
             result = dispatcher_->handle_post_request(shared_from_this(), uri.value().path());
+        } else {
+            std::cerr << "invalid request method: " << request_.method() << "\n";
         }
     }
     response_set_by_code(response_, result);

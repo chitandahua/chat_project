@@ -2,6 +2,7 @@
 #define _SERVER_HPP_
 
 #include <boost/asio.hpp>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -29,6 +30,7 @@ public:
 
     void clear_session(const std::string& uuid) {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::cout << "clear session: " << uuid << "\n";
         sessions_.erase(uuid);
     }
     int run(const ServerConfig& rpc_server_config);

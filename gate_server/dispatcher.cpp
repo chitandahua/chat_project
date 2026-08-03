@@ -38,7 +38,7 @@ ErrorCode get_verify_code(std::shared_ptr<HttpConnection>& connection,
                 "status",
                 static_cast<uint8_t>(ErrorCode::SUCCESS),
                 "data",
-                {{"email", email}, {"code", rpc_result.value().email()}},
+                {{"email", email}, {"code", rpc_result.value().code()}},
             };
         } else {
             result = {
@@ -85,6 +85,7 @@ ErrorCode Dispatcher::handle_get_request(std::shared_ptr<HttpConnection> conn,
     if (it != get_handlers_.end()) {
         return it->second(conn);
     }
+    std::cerr << "invalid get request path: " << path << "\n";
     return ErrorCode::NOT_FOUND;
 }
 
@@ -98,6 +99,7 @@ ErrorCode Dispatcher::handle_post_request(std::shared_ptr<HttpConnection> conn,
     if (it != post_handlers_.end()) {
         return it->second(conn);
     }
+    std::cerr << "invalid post request path: " << path << "\n";
     return ErrorCode::NOT_FOUND;
 }
 

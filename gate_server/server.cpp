@@ -46,13 +46,14 @@ void Server::start_accept() {
     acceptor_.async_accept(
         *sock, [self = shared_from_this(), sock](const boost::system::error_code& error) {
             if (!error) {
+                std::cout << "accept new connection\n";
                 auto session = std::make_shared<Session>(
                     std::move(*sock), std::weak_ptr<Server>(self), self->dispatcher_);
                 self->add_session(session, session->get_uuid());
                 session->start();
             } else {
                 std::cerr << "accept error: " << error.message() << "\n";
-                self->start_accept();
             }
+            self->start_accept();
         });
 }

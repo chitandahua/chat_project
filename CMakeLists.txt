@@ -42,7 +42,7 @@ add_custom_command(
 add_custom_target(generate_proto DEPENDS ${PROTO_GENERATED})
 
 # ---- 编译各个 server ----
-foreach(server gate_server)
+foreach(server gate_server verify_server)
     file(GLOB_RECURSE SERVER_SOURCES
         ${server}/*.cpp
     )
