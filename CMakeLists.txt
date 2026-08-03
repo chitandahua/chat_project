@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Boost REQUIRED COMPONENTS url)
+find_package(nlohmann_json REQUIRED)
 
 foreach(server gate_server)
     file(GLOB_RECURSE SERVER_SOURCES
@@ -20,5 +21,6 @@ foreach(server gate_server)
     target_link_libraries(${server}
         PRIVATE
         Boost::url
+        nlohmann_json::nlohmann_json
     )
 endforeach()
