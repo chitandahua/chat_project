@@ -51,7 +51,9 @@ public:
 private:
     void check_deadline();
     void write_response();
+    void read_request();
     void handle_request();
+    void clean_up();
 
     tcp::socket socket_;
     boost::beast::flat_buffer buffer_{8192};
