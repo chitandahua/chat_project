@@ -1,5 +1,6 @@
 #include <iostream>
 
+#include "config.hpp"
 #include "context_pool.hpp"
 #include "dispatcher.hpp"
 #include "http_connection.hpp"
@@ -14,15 +15,18 @@ Server::~Server() {
     stop();
 }
 
-void Server::run() {
+int Server::run(const ServerConfig& rpc_server_config) {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
-        return;
+        return -1;
     }
 
     context_pool_->run();
-    dispatcher_->init();
+    if (dispatcher_->init(rpc_server_config) != 0) {
+        return -1;
+    }
     start_accept();
+    return 0;
 }
 
 void Server::stop() {

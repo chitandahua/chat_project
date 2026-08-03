@@ -10,6 +10,7 @@ using namespace boost::asio::ip;
 class HttpConnection;
 class ContextPool;
 class Dispatcher;
+class ServerConfig;
 
 class Server : public std::enable_shared_from_this<Server> {
 public:
@@ -30,7 +31,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.erase(uuid);
     }
-    void run();
+    int run(const ServerConfig& rpc_server_config);
     void stop();
 
 private:

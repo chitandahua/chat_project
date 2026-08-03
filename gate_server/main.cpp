@@ -17,7 +17,7 @@ int main() {
                                config.server_config.port);
 
         boost::asio::io_context io_context;
-        auto server = std::make_shared<Server>(io_context, endpoint);
+        auto server = std::make_shared<Server>(io_context, std::move(endpoint));
         boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
         signals.async_wait([&, server](const boost::system::error_code& error, int signal_number) {
             if (signal_number == SIGINT) {
@@ -29,7 +29,9 @@ int main() {
             io_context.stop();
         });
 
-        server->run();
+        if (server->run(config.rpc_server_config) < 0) {
+            return -1;
+        }
         io_context.run();
     } catch (std::exception& e) {
         std::cerr << e.what() << "\n";

@@ -13,8 +13,8 @@
 
 class ServerConfig {
 public:
-    bool from_toml(const toml::table& tbl) {
-        auto node = tbl["server"];
+    bool from_toml(const toml::table& tbl, std::string_view prefix) {
+        auto node = tbl[prefix];
         TOML_FIELD(host);
         TOML_FIELD(port);
         return true;
@@ -33,9 +33,11 @@ class Config {
         std::string path = "../config/gate_server.toml";
         auto config = toml::parse_file(path);
 
-        if (!server_config.from_toml(config) || !server_config.valid()) {
-            std::cout << "host " << server_config.host << " port " << server_config.port
-                      << " is invalid" << "\n";
+        if (!server_config.from_toml(config, "server") || !server_config.valid()) {
+            return false;
+        }
+
+        if (!rpc_server_config.from_toml(config, "verify") || !rpc_server_config.valid()) {
             return false;
         }
 
@@ -52,6 +54,7 @@ public:
     }
 
     ServerConfig server_config;
+    ServerConfig rpc_server_config;
 };
 
 #endif
