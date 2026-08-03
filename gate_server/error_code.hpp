@@ -8,6 +8,8 @@ enum class ErrorCode : uint8_t {
     FAILED,
     NOT_FOUND,
     TIMEOUT,
+    INVALID_JSON,
+    RPC_FAILED,
     UNKNOWN,
 };
 

@@ -40,18 +40,17 @@ void HttpConnection::handle_request() {
     // 短连接
     response_.keep_alive(false);
 
-    if (request_.method() == http::verb::get) {
-        auto uri = boost::urls::parse_origin_form(request_.target());
-        ErrorCode result;
-        if (!uri) {
-            result = ErrorCode::FAILED;
-        } else {
+    ErrorCode result = ErrorCode::FAILED;
+    auto uri = boost::urls::parse_origin_form(request_.target());
+    if (uri) {
+        if (request_.method() == http::verb::get) {
             result = dispatcher_->handle_get_request(shared_from_this(), uri.value().path());
+        } else if (request_.method() == http::verb::post) {
+            result = dispatcher_->handle_post_request(shared_from_this(), uri.value().path());
         }
-
-        response_set_by_code(response_, result);
-        write_response();
     }
+    response_set_by_code(response_, result);
+    write_response();
 }
 
 void HttpConnection::write_response() {
