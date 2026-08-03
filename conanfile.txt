@@ -1,5 +1,8 @@
 [requires]
+#boost/1.91.0
 nlohmann_json/3.12.0
+#protobuf/7.35.0
+#grpc/1.82.0
 
 [generators]
 CMakeDeps
