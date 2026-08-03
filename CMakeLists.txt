@@ -8,6 +8,7 @@ find_package(Boost REQUIRED COMPONENTS url)
 find_package(nlohmann_json REQUIRED)
 find_package(protobuf REQUIRED)
 find_package(gRPC REQUIRED)
+find_package(tomlplusplus CONFIG REQUIRED)
 
 # ---- 编译 proto,生成文件放在 build 目录下,不写回源码树 ----
 set(PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gate_server/proto)
@@ -65,5 +66,6 @@ foreach(server gate_server)
         nlohmann_json::nlohmann_json
         protobuf::libprotobuf
         gRPC::grpc++
+        tomlplusplus::tomlplusplus
     )
 endforeach()

@@ -5,8 +5,8 @@
 #include "http_connection.hpp"
 #include "server.hpp"
 
-Server::Server(boost::asio::io_context& ioc, short port)
-    : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)),
+Server::Server(boost::asio::io_context& ioc, tcp::endpoint endpoint)
+    : acceptor_(ioc, tcp::endpoint(std::move(endpoint))),
       context_pool_(std::make_unique<ContextPool>(4)),
       dispatcher_(std::make_shared<Dispatcher>()) {}
 

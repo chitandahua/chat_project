@@ -14,7 +14,7 @@ class Dispatcher;
 class Server : public std::enable_shared_from_this<Server> {
 public:
     using Session = HttpConnection;
-    Server(boost::asio::io_context& ioc, short port);
+    Server(boost::asio::io_context& ioc, tcp::endpoint endpoint);
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
     Server(Server&&) noexcept = delete;
