@@ -1,0 +1,54 @@
+#include <iostream>
+
+#include "context_pool.hpp"
+#include "dispatcher.hpp"
+#include "http_connection.hpp"
+#include "server.hpp"
+
+Server::Server(boost::asio::io_context& ioc, short port)
+    : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)),
+      context_pool_(std::make_unique<ContextPool>(4)),
+      dispatcher_(std::make_shared<Dispatcher>()) {}
+
+Server::~Server() {
+    stop();
+}
+
+void Server::run() {
+    bool expected = false;
+    if (!running_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
+    context_pool_->run();
+    dispatcher_->init();
+    start_accept();
+}
+
+void Server::stop() {
+    bool expected = true;
+    if (!running_.compare_exchange_strong(expected, false)) {
+        return;  // 防止重复调用 stop
+    }
+
+    acceptor_.close();
+    context_pool_->stop();
+    std::lock_guard<std::mutex> lock(mutex_);
+    sessions_.clear();
+}
+
+void Server::start_accept() {
+    auto sock = std::make_shared<tcp::socket>(context_pool_->get_io_context());
+    acceptor_.async_accept(
+        *sock, [self = shared_from_this(), sock](const boost::system::error_code& error) {
+            if (!error) {
+                auto session = std::make_shared<Session>(
+                    std::move(*sock), std::weak_ptr<Server>(self), self->dispatcher_);
+                self->add_session(session, session->get_uuid());
+                session->start();
+            } else {
+                std::cerr << "accept error: " << error.message() << "\n";
+                self->start_accept();
+            }
+        });
+}
