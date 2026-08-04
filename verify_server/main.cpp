@@ -3,6 +3,11 @@
 #include <memory>
 #include <string>
 
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
+#include "mail_client.hpp"
 #include "message.grpc.pb.h"
 
 using grpc::Server;
@@ -19,25 +24,22 @@ public:
         // 打印日志
         std::cout << "Received request for email: " << request->email() << std::endl;
 
+        auto unique_id = boost::uuids::to_string(boost::uuids::random_generator()());
+        std::string content = std::string("您的验证码为") + unique_id + "请三分钟内完成注册";
+        // 用本机用户测试
+        MailClient client("127.0.0.1", 25);
+        client.send_mail("chitanda@localhost", "verify code", content);
+        // client.send_mail(request->email(), "verify code", content);
+
         // 构造响应
         response->set_error(0);
         response->set_email(request->email());
-        response->set_code(generate_verify_code());  // 生成6位随机验证码
+        response->set_code("just test");
 
         return grpc::Status::OK;
     }
 
 private:
-    std::string generate_verify_code() {
-        // 简易随机验证码（6位数字）
-        static const char digits[] = "0123456789";
-        std::string code;
-        code.resize(6);
-        for (int i = 0; i < 6; ++i) {
-            code[i] = digits[rand() % 10];
-        }
-        return code;
-    }
 };
 
 int main(int argc, char** argv) {

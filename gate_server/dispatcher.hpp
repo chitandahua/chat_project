@@ -37,7 +37,7 @@ public:
     int init(const ServerConfig& rpc_server_config);
 
     // TODO 每加一个service都要加个字段 有没有多态或者其他方式 使用map保存之类的
-    // 或者只能static 单例了
+    // stub其实没必要保存 每次调用时再构造也不迟
     class GrpcClient {
     public:
         std::shared_ptr<VerifyServiceClient> verify_service_client_;

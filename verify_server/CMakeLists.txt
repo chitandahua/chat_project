@@ -3,8 +3,11 @@ file(GLOB_RECURSE VERIFY_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 add_executable(verify_server ${VERIFY_SOURCES})
 
+find_package(mailio REQUIRED)
+
 target_link_libraries(verify_server
     PRIVATE
     project_common_deps
     message_proto
+    mailio::mailio
 )
