@@ -5,3 +5,16 @@ port = 10086
 [verify]
 host = "127.0.0.1"
 port = 10087
+
+[redis]
+host = "127.0.0.1"
+port = 6379
+user = ""
+pass = ""
+
+[mysql]
+host = "127.0.0.1"
+port = 3306
+user = ""
+pass = ""
+database = "user"

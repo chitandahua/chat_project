@@ -11,7 +11,7 @@ using namespace boost::asio::ip;
 class HttpConnection;
 class ContextPool;
 class Dispatcher;
-class ServerConfig;
+class Config;
 
 class Server : public std::enable_shared_from_this<Server> {
 public:
@@ -33,7 +33,7 @@ public:
         std::cout << "clear session: " << uuid << "\n";
         sessions_.erase(uuid);
     }
-    int run(const ServerConfig& rpc_server_config);
+    int run(const Config& config);
     void stop();
 
 private:

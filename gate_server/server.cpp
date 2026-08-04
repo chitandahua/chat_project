@@ -9,20 +9,20 @@
 Server::Server(boost::asio::io_context& ioc, tcp::endpoint endpoint)
     : acceptor_(ioc, tcp::endpoint(std::move(endpoint))),
       context_pool_(std::make_unique<ContextPool>(4)),
-      dispatcher_(std::make_shared<Dispatcher>()) {}
+      dispatcher_(std::make_shared<Dispatcher>(ioc)) {}
 
 Server::~Server() {
     stop();
 }
 
-int Server::run(const ServerConfig& rpc_server_config) {
+int Server::run(const Config& config) {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
         return -1;
     }
 
     context_pool_->run();
-    if (dispatcher_->init(rpc_server_config) != 0) {
+    if (dispatcher_->init(config) != 0) {
         return -1;
     }
     start_accept();

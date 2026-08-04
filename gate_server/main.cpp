@@ -29,7 +29,7 @@ int main() {
             io_context.stop();
         });
 
-        if (server->run(config.rpc_server_config) < 0) {
+        if (server->run(config) < 0) {
             return -1;
         }
         io_context.run();

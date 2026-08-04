@@ -28,6 +28,50 @@ public:
     int port;
 };
 
+class RedisConfig {
+public:
+    std::string host;
+    int port;
+    std::string user;
+    std::string pass;
+
+    bool from_toml(const toml::table& tbl, std::string_view prefix) {
+        auto node = tbl[prefix];
+        TOML_FIELD(host);
+        TOML_FIELD(port);
+        TOML_FIELD(user);
+        TOML_FIELD(pass);
+        return true;
+    }
+
+    bool valid() const {
+        return !host.empty() && port >= 1 && port <= 65535;
+    }
+};
+
+class MysqlConfig {
+public:
+    std::string host;
+    int port;
+    std::string user;
+    std::string pass;
+    std::string database;
+
+    bool from_toml(const toml::table& tbl, std::string_view prefix) {
+        auto node = tbl[prefix];
+        TOML_FIELD(host);
+        TOML_FIELD(port);
+        TOML_FIELD(user);
+        TOML_FIELD(pass);
+        TOML_FIELD(database);
+        return true;
+    }
+
+    bool valid() const {
+        return !host.empty() && port >= 1 && port <= 65535;
+    }
+};
+
 class Config {
     bool read_config() {
         std::string path = "../config/gate_server.toml";
@@ -38,6 +82,14 @@ class Config {
         }
 
         if (!rpc_server_config.from_toml(config, "verify") || !rpc_server_config.valid()) {
+            return false;
+        }
+
+        if (!redis_config.from_toml(config, "redis") || !redis_config.valid()) {
+            return false;
+        }
+
+        if (!mysql_config.from_toml(config, "mysql") || !mysql_config.valid()) {
             return false;
         }
 
@@ -55,6 +107,8 @@ public:
 
     ServerConfig server_config;
     ServerConfig rpc_server_config;
+    RedisConfig redis_config;
+    MysqlConfig mysql_config;
 };
 
 #endif

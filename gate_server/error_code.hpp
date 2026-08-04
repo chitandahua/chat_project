@@ -10,6 +10,8 @@ enum class ErrorCode : uint8_t {
     TIMEOUT,
     INVALID_JSON,
     RPC_FAILED,
+    INVALID_VERIFY_CODE,
+    USER_OR_EMAIL_EXIST,
     UNKNOWN,
 };
 
