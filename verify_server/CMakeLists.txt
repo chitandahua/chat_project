@@ -5,9 +5,12 @@ add_executable(verify_server ${VERIFY_SOURCES})
 
 find_package(mailio REQUIRED)
 
+# find_package(Boost REQUIRED COMPONENTS redis)
 target_link_libraries(verify_server
     PRIVATE
     project_common_deps
     message_proto
     mailio::mailio
+
+    # Boost::redis
 )
