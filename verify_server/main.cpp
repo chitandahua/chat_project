@@ -18,10 +18,9 @@
 
 using grpc::Server;
 using grpc::ServerBuilder;
-using grpc::ServerContext;
 using grpc::Status;
 
-class VerifyServiceImpl final : public message::VerifyService::Service {
+class VerifyServiceImpl final : public message::VerifyService::CallbackService {
 public:
     VerifyServiceImpl(std::shared_ptr<RedisClient>& client, boost::asio::io_context& ioc)
         : redis_client_(client), ioc_(ioc) {}
@@ -73,37 +72,43 @@ public:
     }
 
     // 实现 GetVerifyCode RPC
-    grpc::Status GetVerifyCode(grpc::ServerContext* context,
-                               const message::GetVerifyRequest* request,
-                               message::GetVerifyResponse* response) override {
+    grpc::ServerUnaryReactor* GetVerifyCode(grpc::CallbackServerContext* context,
+                                            const message::GetVerifyRequest* request,
+                                            message::GetVerifyResponse* response) override {
         // 打印日志
+        auto* reactor = context->DefaultReactor();
         auto email = request->email();
-        std::cout << "Received request for email: " << email << std::endl;
 
-        // TODO
-        auto unique_id =
-            boost::asio::co_spawn(ioc_, this->get_verify_code(email), boost::asio::use_future)
-                .get();
-        if (!unique_id) {
-            response->set_error(-1);
-            response->set_email(email);
-            return grpc::Status::OK;
-        }
+        // 把协程投递到 io_context,不在这里阻塞等待
+        boost::asio::co_spawn(
+            ioc_,
+            [this, email, response, reactor]() -> boost::asio::awaitable<void> {
+                auto unique_id = co_await this->get_verify_code(email);
 
-        std::string content =
-            std::string("您的验证码为") + unique_id.value() + "请三分钟内完成注册";
-        // 用本机用户测试
-        MailClient mail_client("127.0.0.1", 25);
-        // TODO
-        // mail_client.send_mail("chitanda@localhost", "verify code", content);
-        // mail_client.send_mail(request->email(), "verify code", content);
+                if (!unique_id) {
+                    response->set_error(-1);
+                    response->set_email(email);
+                } else {
+                    // ... 发邮件、设置正常响应 ...
+                    std::string content =
+                        std::string("您的验证码为") + unique_id.value() + "请三分钟内完成注册";
+                    // TODO 用本机用户测试
+                    // MailClient mail_client("127.0.0.1", 25);
+                    // mail_client.send_mail("chitanda@localhost", "verify code", content);
+                    // mail_client.send_mail(request->email(), "verify code", content);
 
-        // 构造响应
-        response->set_error(0);
-        response->set_email(email);
-        response->set_code("just test");
+                    response->set_error(0);
+                    response->set_email(email);
+                    response->set_code("just test");
+                }
 
-        return grpc::Status::OK;
+                // 结果准备好了,这时候才真正通知 gRPC 这次 RPC 完成
+                reactor->Finish(grpc::Status::OK);
+            },
+            boost::asio::detached);
+
+        // GetVerifyCode 这个函数立刻返回,不等结果
+        return reactor;
     }
 
 private:
