@@ -8,4 +8,5 @@ target_link_libraries(gate_server
     PRIVATE
     project_common_deps # 公共依赖,一个 target 全带上
     message_proto
+    common
 )

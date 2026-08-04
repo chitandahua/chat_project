@@ -29,8 +29,8 @@ public:
     // 先查redis 不存在则存到redis缓存中
     auto get_verify_code(const std::string& email)
         -> boost::asio::awaitable<tl::expected<std::string, int>> {
-        constexpr std::string_view prefix = "code_";
-        auto key = std::string(prefix) + email;
+        // constexpr std::string_view prefix = "code_";
+        auto key = email;
 
         using boost::redis::request;
         using boost::redis::response;

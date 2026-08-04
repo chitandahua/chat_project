@@ -54,5 +54,6 @@ set(SHARED_PROTO_DIR ${CMAKE_SOURCE_DIR}/proto)
 include(cmake/proto.cmake)
 
 # ---- 下钻各个子项目 ----
+add_subdirectory(common)
 add_subdirectory(gate_server)
 add_subdirectory(verify_server)

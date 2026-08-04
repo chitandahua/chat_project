@@ -11,6 +11,7 @@ target_link_libraries(verify_server
     project_common_deps
     message_proto
     mailio::mailio
+    common
 
     # Boost::redis
 )
