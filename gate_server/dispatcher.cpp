@@ -223,19 +223,21 @@ asio::awaitable<http::response<http::string_body>> get_verify_code(const Request
     co_return json_response(res);
 }
 
-nlohmann::json response_payload(nlohmann::json&& body, ServiceError err = ServiceError::SUCCESS,
+nlohmann::json response_payload(std::optional<nlohmann::json> body = std::nullopt,
+                                ServiceError err = ServiceError::SUCCESS,
                                 const std::string& msg = "") {
-    nlohmann::json j = {{"data", body}};
+    nlohmann::json j = {};
     j["status"] = static_cast<uint8_t>(err);
     j["message"] = msg;
+    if (body.has_value()) {
+        j["data"] = std::move(body.value());
+    }
     return j;
 }
 
-nlohmann::json response_payload(ServiceError err, const std::string& msg = "") {
-    nlohmann::json j = {{"data", {}}};
-    j["status"] = static_cast<uint8_t>(err);
-    j["message"] = msg;
-    return j;
+nlohmann::json response_payload_empty(ServiceError err = ServiceError::SUCCESS,
+                                      const std::string& msg = "") {
+    return response_payload(std::nullopt, err, msg);
 }
 
 asio::awaitable<http::response<http::string_body>> user_register(const RequestData& input) {
@@ -254,17 +256,46 @@ asio::awaitable<http::response<http::string_body>> user_register(const RequestDa
     auto result = std::get<0>(resp).value();
     if (!result || result.value() != request.value().verify_code) {
         co_return nlohmann_json_response(
-            response_payload(ServiceError::INVALID_VERIFY_CODE, "Invalid verify code"));
+            response_payload_empty(ServiceError::INVALID_VERIFY_CODE, "Invalid verify code"));
     }
 
     std::cout << "redis verify code match\n";
     auto user_info = co_await input.user_repo.create_user(request.value());
     if (!user_info && user_info.error() == ServiceError::USER_OR_EMAIL_EXIST) {
         co_return nlohmann_json_response(
-            response_payload(ServiceError::USER_OR_EMAIL_EXIST, "User or email exist"));
+            response_payload_empty(ServiceError::USER_OR_EMAIL_EXIST, "User or email exist"));
     }
 
     co_return nlohmann_json_response(response_payload(user_info.value()));
+}
+
+asio::awaitable<http::response<http::string_body>> reset_password(const RequestData& input) {
+    auto request = nlohmann_parse_json<UserResetPasswordRequest>(input.request.body());
+    if (!request) {
+        co_return bad_request("Invalid JSON body");
+    }
+
+    // 查询redis verify code是否匹配
+    boost::redis::request req;
+    req.push("GET", request.value().email);
+    boost::redis::response<std::optional<std::string>> resp;
+
+    // TODO timeout
+    co_await input.redis_conn.async_exec(req, resp);
+    auto result = std::get<0>(resp).value();
+    if (!result || result.value() != request.value().verify_code) {
+        co_return nlohmann_json_response(
+            response_payload_empty(ServiceError::INVALID_VERIFY_CODE, "Invalid verify code"));
+    }
+
+    std::cout << "redis verify code match\n";
+    auto success = co_await input.user_repo.reset_password(request.value());
+    if (!success) {
+        co_return nlohmann_json_response(
+            response_payload_empty(ServiceError::USER_OR_EMAIL_INVALID, "User or email invalid"));
+    }
+
+    co_return nlohmann_json_response(response_payload_empty());
 }
 
 asio::awaitable<http::response<http::string_body>> Dispatcher::handle_request(
@@ -354,6 +385,7 @@ void Dispatcher::handlers_init() {
     handlers_.insert({"/get_test", HttpHandler(http::verb::get, get_test)});
     handlers_.insert({"/get_verify_code", HttpHandler(http::verb::post, get_verify_code)});
     handlers_.insert({"/user_register", HttpHandler(http::verb::post, user_register)});
+    handlers_.insert({"/reset_password", HttpHandler(http::verb::post, reset_password)});
 }
 
 void Dispatcher::register_get_handler(const std::string& path, RequestHandler&& handler) {

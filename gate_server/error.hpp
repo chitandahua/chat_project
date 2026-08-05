@@ -17,6 +17,7 @@ enum class ServiceError : uint8_t {
     RPC_FAILED = 4,
     INVALID_VERIFY_CODE = 5,
     USER_OR_EMAIL_EXIST = 6,
+    USER_OR_EMAIL_INVALID = 7,
 };
 
 enum class ErrorCode : uint8_t {
