@@ -2,6 +2,7 @@
 #define _USER_REPO_HPP_
 
 #include <boost/mysql/connection_pool.hpp>
+#include <boost/mysql/row.hpp>
 #include <boost/mysql/static_results.hpp>
 #include <boost/mysql/string_view.hpp>
 #include <boost/mysql/with_params.hpp>
@@ -50,6 +51,13 @@ public:
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserResetPasswordRequest, user, email, passwd, verify_code)
 };
 
+class UserLoginRequest {
+public:
+    std::string user;
+    std::string passwd;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserLoginRequest, user, passwd)
+};
+
 class UserRepo {
 public:
     UserRepo(std::shared_ptr<mysql::connection_pool>& pool) noexcept : pool_(pool) {}
@@ -85,6 +93,23 @@ public:
 
         conn.return_without_reset();
         co_return result.affected_rows() != 0;
+    }
+
+    auto check_password(const UserLoginRequest& req) const
+        -> boost::asio::awaitable<tl::expected<int64_t, ServiceError>> {
+        auto conn = co_await pool_->async_get_connection();
+        mysql::static_results<std::tuple<int64_t>> result;
+        co_await conn->async_execute(
+            mysql::with_params("SELECT id FROM user WHERE name = {0} AND pwd = {1}", req.user,
+                               req.passwd),
+            result);
+
+        conn.return_without_reset();
+        // if (result.affected_rows() == 0) {
+        if (result.rows<0>().empty()) {
+            co_return tl::make_unexpected(ServiceError::USER_OR_PASSWORD_INVALID);
+        }
+        co_return std::get<0>(result.rows<0>().front());
     }
 
 private:

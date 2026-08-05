@@ -6,6 +6,10 @@ port = 10086
 host = "127.0.0.1"
 port = 10087
 
+[status]
+host = "127.0.0.1"
+port = 10088
+
 [redis]
 host = "127.0.0.1"
 port = 6379

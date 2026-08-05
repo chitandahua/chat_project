@@ -81,7 +81,11 @@ class Config {
             return false;
         }
 
-        if (!rpc_server_config.from_toml(config, "verify") || !rpc_server_config.valid()) {
+        if (!verify_server_config.from_toml(config, "verify") || !verify_server_config.valid()) {
+            return false;
+        }
+
+        if (!status_server_config.from_toml(config, "status") || !status_server_config.valid()) {
             return false;
         }
 
@@ -106,7 +110,8 @@ public:
     }
 
     ServerConfig server_config;
-    ServerConfig rpc_server_config;
+    ServerConfig verify_server_config;
+    ServerConfig status_server_config;
     RedisConfig redis_config;
     MysqlConfig mysql_config;
 };

@@ -18,7 +18,32 @@ enum class ServiceError : uint8_t {
     INVALID_VERIFY_CODE = 5,
     USER_OR_EMAIL_EXIST = 6,
     USER_OR_EMAIL_INVALID = 7,
+    USER_OR_PASSWORD_INVALID = 8,
 };
+
+inline const char* ServiceError2String(ServiceError err) {
+    switch (err) {
+        case ServiceError::SUCCESS:
+            return "Ok";
+        case ServiceError::NOT_FOUND:
+            return "Not found";
+        case ServiceError::INVALID_JSON:
+            return "Invalid json";
+        case ServiceError::RPC_FAILED:
+            // return "RPC failed";
+            return "Internal server error";
+        case ServiceError::INVALID_VERIFY_CODE:
+            return "Invalid verify code";
+        case ServiceError::USER_OR_EMAIL_EXIST:
+            return "User or email exist";
+        case ServiceError::USER_OR_EMAIL_INVALID:
+            return "User or email invalid";
+        case ServiceError::USER_OR_PASSWORD_INVALID:
+            return "User or password invalid";
+        default:
+            return "Unknown";
+    }
+}
 
 enum class ErrorCode : uint8_t {
     NOT_FOUND = 0,

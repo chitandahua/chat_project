@@ -5,6 +5,7 @@
 #include <memory>
 #include <tl/expected.hpp>
 
+#include "error.hpp"
 #include "message.grpc.pb.h"
 
 class VerifyServiceClient {
@@ -28,6 +29,25 @@ public:
 
 private:
     std::unique_ptr<message::VerifyService::Stub> verify_service_stub_;
+};
+
+class StatusServiceClient {
+public:
+    static tl::expected<message::GetChatServerResponse, ServiceError> get_chat_server(
+        const std::shared_ptr<grpc::Channel>& channel, int64_t id) {
+        message::GetChatServerRequest request;
+        grpc::ClientContext context;
+        message::GetChatServerResponse response;
+
+        request.set_uid(id);
+        grpc::Status status =
+            message::StatusService::NewStub(channel)->GetChatServer(&context, request, &response);
+        if (!status.ok()) {
+            std::cerr << status.error_message() << "\n";
+            return tl::make_unexpected(ServiceError::RPC_FAILED);
+        }
+        return response;
+    }
 };
 
 #endif

@@ -9,10 +9,6 @@
 
 #include <memory>
 
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-#include <boost/uuid/uuid_io.hpp>
-
 using namespace boost::asio::ip;
 using namespace boost::beast;
 class Server;

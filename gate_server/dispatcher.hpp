@@ -62,6 +62,7 @@ private:
     void handlers_init();
 
     std::shared_ptr<grpc::Channel> grpc_channel_;
+    std::shared_ptr<grpc::Channel> status_grpc_channel_;
     std::shared_ptr<boost::redis::connection> redis_conn_;
     std::shared_ptr<MysqlConnPool> mysql_conn_;
     std::unordered_multimap<std::string_view, HttpHandler> handlers_;

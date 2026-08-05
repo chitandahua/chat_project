@@ -1,6 +1,10 @@
 #include <boost/url.hpp>
 #include <iostream>
 
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
 #include "dispatcher.hpp"
 #include "error.h"
 #include "http_connection.hpp"

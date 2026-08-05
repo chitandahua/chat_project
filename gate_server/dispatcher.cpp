@@ -1,4 +1,5 @@
 #include <boost/url.hpp>
+#include <cstdint>
 #include <memory>
 #include <nlohmann/json.hpp>
 
@@ -118,7 +119,7 @@ http::response<http::string_body> nlohmann_json_response(const T& body) {
     http::response<http::string_body> res;
 
     res.set("Content-Type", "application/json");
-    res.body() = nlohmann::json(body);
+    res.body() = nlohmann::json(body).dump();
 
     return res;
 }
@@ -166,6 +167,7 @@ struct RequestData {
     mysql::connection_pool& mysql_pool;
     boost::redis::connection& redis_conn;
     std::shared_ptr<grpc::Channel>& grpc_channel;
+    std::shared_ptr<grpc::Channel>& status_grpc_channel;
 
     UserRepo user_repo;
 };
@@ -213,6 +215,7 @@ asio::awaitable<http::response<http::string_body>> get_verify_code(const Request
         co_return bad_request("Invalid JSON body");
     }
 
+    // TODO 改为异步
     VerifyServiceClient verify_service_client(input.grpc_channel);
     auto rpc_result = verify_service_client.get_verify_code(req.value().email);
     if (!rpc_result) {
@@ -228,7 +231,7 @@ nlohmann::json response_payload(std::optional<nlohmann::json> body = std::nullop
                                 const std::string& msg = "") {
     nlohmann::json j = {};
     j["status"] = static_cast<uint8_t>(err);
-    j["message"] = msg;
+    j["message"] = msg.empty() ? ServiceError2String(err) : msg;
     if (body.has_value()) {
         j["data"] = std::move(body.value());
     }
@@ -255,15 +258,13 @@ asio::awaitable<http::response<http::string_body>> user_register(const RequestDa
     co_await input.redis_conn.async_exec(req, resp);
     auto result = std::get<0>(resp).value();
     if (!result || result.value() != request.value().verify_code) {
-        co_return nlohmann_json_response(
-            response_payload_empty(ServiceError::INVALID_VERIFY_CODE, "Invalid verify code"));
+        co_return nlohmann_json_response(response_payload_empty(ServiceError::INVALID_VERIFY_CODE));
     }
 
     std::cout << "redis verify code match\n";
     auto user_info = co_await input.user_repo.create_user(request.value());
     if (!user_info && user_info.error() == ServiceError::USER_OR_EMAIL_EXIST) {
-        co_return nlohmann_json_response(
-            response_payload_empty(ServiceError::USER_OR_EMAIL_EXIST, "User or email exist"));
+        co_return nlohmann_json_response(response_payload_empty(ServiceError::USER_OR_EMAIL_EXIST));
     }
 
     co_return nlohmann_json_response(response_payload(user_info.value()));
@@ -284,18 +285,50 @@ asio::awaitable<http::response<http::string_body>> reset_password(const RequestD
     co_await input.redis_conn.async_exec(req, resp);
     auto result = std::get<0>(resp).value();
     if (!result || result.value() != request.value().verify_code) {
-        co_return nlohmann_json_response(
-            response_payload_empty(ServiceError::INVALID_VERIFY_CODE, "Invalid verify code"));
+        co_return nlohmann_json_response(response_payload_empty(ServiceError::INVALID_VERIFY_CODE));
     }
 
     std::cout << "redis verify code match\n";
     auto success = co_await input.user_repo.reset_password(request.value());
     if (!success) {
         co_return nlohmann_json_response(
-            response_payload_empty(ServiceError::USER_OR_EMAIL_INVALID, "User or email invalid"));
+            response_payload_empty(ServiceError::USER_OR_EMAIL_INVALID));
     }
 
     co_return nlohmann_json_response(response_payload_empty());
+}
+
+class UserLoginResponse {
+public:
+    int64_t id;
+    std::string user;
+    std::string token;
+    std::string host;
+    int port;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserLoginResponse, id, user, token, host, port)
+};
+
+asio::awaitable<http::response<http::string_body>> user_login(const RequestData& input) {
+    auto request = nlohmann_parse_json<UserLoginRequest>(input.request.body());
+    if (!request) {
+        co_return bad_request("Invalid JSON body");
+    }
+
+    auto result = co_await input.user_repo.check_password(request.value());
+    if (!result) {
+        co_return nlohmann_json_response(response_payload_empty(result.error()));
+    }
+
+    // grpc获取token和host
+    // TODO 改为异步
+    auto response = StatusServiceClient::get_chat_server(input.status_grpc_channel, result.value());
+    if (!response) {
+        co_return nlohmann_json_response(response_payload_empty(response.error()));
+    }
+
+    co_return nlohmann_json_response(response_payload(
+        UserLoginResponse{result.value(), request.value().user, response.value().token(),
+                          response.value().host(), response.value().port()}));
 }
 
 asio::awaitable<http::response<http::string_body>> Dispatcher::handle_request(
@@ -324,9 +357,9 @@ asio::awaitable<http::response<http::string_body>> Dispatcher::handle_request(
     // Invoke the handler
     try {
         // Attempt to handle the request
-        co_return co_await it3->second.handler(RequestData{request, *target, *mysql_conn_->pool(),
-                                                           *redis_conn_, grpc_channel_,
-                                                           UserRepo(mysql_conn_->pool())});
+        co_return co_await it3->second.handler(
+            RequestData{request, *target, *mysql_conn_->pool(), *redis_conn_, grpc_channel_,
+                        status_grpc_channel_, UserRepo(mysql_conn_->pool())});
     } catch (const mysql::error_with_diagnostics& err) {
         // A Boost.MySQL error. This will happen if you don't have connectivity
         // to your database, your schema is incorrect or your credentials are invalid.
@@ -358,13 +391,22 @@ void redis_config_init(const RedisConfig& redis_config, boost::redis::config& cf
 }
 
 int Dispatcher::init(const Config& config) {
-    // grpc
+    // verify grpc
     auto target =
-        config.rpc_server_config.host + ":" + std::to_string(config.rpc_server_config.port);
+        config.verify_server_config.host + ":" + std::to_string(config.verify_server_config.port);
     grpc_channel_ = std::shared_ptr<grpc::Channel>(
         grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
     if (!grpc_channel_) {
-        std::cerr << "Failed to create gRPC channel. Invalid address or port." << "\n";
+        std::cerr << "Failed to create verify gRPC channel. Invalid address or port." << "\n";
+        return -1;
+    }
+    // status grpc
+    auto status_target =
+        config.status_server_config.host + ":" + std::to_string(config.status_server_config.port);
+    status_grpc_channel_ = std::shared_ptr<grpc::Channel>(
+        grpc::CreateChannel(status_target, grpc::InsecureChannelCredentials()));
+    if (!status_grpc_channel_) {
+        std::cerr << "Failed to create status gRPC channel. Invalid address or port." << "\n";
         return -1;
     }
 
@@ -386,6 +428,7 @@ void Dispatcher::handlers_init() {
     handlers_.insert({"/get_verify_code", HttpHandler(http::verb::post, get_verify_code)});
     handlers_.insert({"/user_register", HttpHandler(http::verb::post, user_register)});
     handlers_.insert({"/reset_password", HttpHandler(http::verb::post, reset_password)});
+    handlers_.insert({"/user_login", HttpHandler(http::verb::post, user_login)});
 }
 
 void Dispatcher::register_get_handler(const std::string& path, RequestHandler&& handler) {
