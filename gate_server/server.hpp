@@ -2,6 +2,7 @@
 #define _SERVER_HPP_
 
 #include <boost/asio.hpp>
+#include <boost/asio/awaitable.hpp>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -16,7 +17,7 @@ class Config;
 class Server : public std::enable_shared_from_this<Server> {
 public:
     using Session = HttpConnection;
-    Server(boost::asio::io_context& ioc, tcp::endpoint endpoint);
+    Server(std::shared_ptr<boost::asio::io_context>& ioc, tcp::endpoint endpoint);
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
     Server(Server&&) noexcept = delete;
@@ -33,12 +34,12 @@ public:
         std::cout << "clear session: " << uuid << "\n";
         sessions_.erase(uuid);
     }
-    int run(const Config& config);
+
+    int init(const Config& config);
+    boost::asio::awaitable<void> run();
     void stop();
 
 private:
-    void start_accept();
-
     tcp::acceptor acceptor_;
     std::unique_ptr<ContextPool> context_pool_;
     std::atomic<bool> running_{false};

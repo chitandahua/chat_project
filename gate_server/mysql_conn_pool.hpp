@@ -10,24 +10,24 @@
 
 class MysqlConnPool {
 public:
-    MysqlConnPool(boost::asio::io_context& ioc) : ioc_(ioc) {}
+    MysqlConnPool(std::shared_ptr<boost::asio::io_context>& ioc) : ioc_(ioc) {}
 
     void init(const MysqlConfig& cfg) {
-        boost::mysql::pool_params p;
-        p.server_address.emplace_host_and_port(cfg.host, cfg.port);
-        p.username = cfg.user;
-        p.password = cfg.pass;
-        p.database = cfg.database;
+        boost::mysql::pool_params params;
+        params.server_address.emplace_host_and_port(cfg.host, cfg.port);
+        params.username = cfg.user;
+        params.password = cfg.pass;
+        params.database = cfg.database;
 
-        pool_ = std::make_shared<boost::mysql::connection_pool>(ioc_, std::move(p));
+        pool_ = std::make_shared<boost::mysql::connection_pool>(*ioc_, std::move(params));
     }
 
-    std::shared_ptr<boost::mysql::connection_pool> pool() {
+    std::shared_ptr<boost::mysql::connection_pool>& pool() {
         return pool_;
     }
 
 private:
-    boost::asio::io_context& ioc_;
+    std::shared_ptr<boost::asio::io_context> ioc_;
     std::shared_ptr<boost::mysql::connection_pool> pool_;
 };
 

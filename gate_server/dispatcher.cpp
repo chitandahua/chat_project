@@ -8,125 +8,311 @@
 #include <boost/mysql/pool_params.hpp>
 
 #include <iostream>
+#include <optional>
+#include <sstream>
+#include <string_view>
 
-#include "config.hpp"
-#include "dispatcher.hpp"
-#include "http_connection.hpp"
-#include "mysql_conn_pool.hpp"
-#include "user_repo.hpp"
-
+#include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value_from.hpp>
 #include <boost/json/value_to.hpp>
 
+#include <boost/beast/http/message.hpp>
+#include <boost/beast/http/status.hpp>
+
+#include <boost/describe/class.hpp>
 #include <boost/redis/src.hpp>
+
+#include "config.hpp"
+#include "dispatcher.hpp"
+#include "error.hpp"
+#include "http_connection.hpp"
+#include "mysql_conn_pool.hpp"
+#include "user_repo.hpp"
 
 namespace asio = boost::asio;
 namespace mysql = boost::mysql;
+namespace http = boost::beast::http;
 
-Dispatcher::Dispatcher(boost::asio::io_context& ioc)
-    : redis_conn_(std::make_shared<boost::redis::connection>(ioc)),
-      mysql_conn_(std::make_shared<MysqlConnPool>(ioc)) {}
+void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& diag) {
+    auto guard = lock_cerr();
 
-ErrorCode get_test(std::shared_ptr<HttpConnection>& connection) {
-    auto uri = boost::urls::parse_origin_form(connection->request().target());
-    if (!uri) {
-        return ErrorCode::FAILED;
+    std::cerr << "MySQL error: " << ec << " " << ec.message();
+
+    if (!diag.client_message().empty()) {
+        std::cerr << ": " << diag.client_message();
     }
 
-    auto ostream = boost::beast::ostream(connection->response().body());
+    if (!diag.server_message().empty()) {
+        std::cerr << ": " << diag.server_message();
+    }
+
+    std::cerr << std::endl;
+}
+
+// Attempts to parse a numeric ID from a string
+std::optional<std::int64_t> parse_id(std::string_view from) {
+    std::int64_t id{};
+    auto res = std::from_chars(from.data(), from.data() + from.size(), id);
+    if (res.ec != std::errc{} || res.ptr != from.data() + from.size())
+        return std::nullopt;
+    return id;
+}
+
+http::response<http::string_body> error_response(http::status code, std::string_view msg) {
+    http::response<http::string_body> res;
+    res.result(code);
+    res.body() = msg;
+    return res;
+}
+
+// Like error_response, but always uses a 400 status code
+http::response<http::string_body> bad_request(std::string_view body) {
+    return error_response(http::status::bad_request, body);
+}
+
+// Like error_response, but always uses a 500 status code and
+// never provides extra information that might help potential attackers.
+http::response<http::string_body> internal_server_error() {
+    return error_response(http::status::internal_server_error, "Internal server error");
+}
+
+// Creates a response with a serialized JSON body.
+// T should be a type with Boost.Describe metadata containing the
+// body data to be serialized
+template <class T>
+http::response<http::string_body> json_response(const T& body) {
+    http::response<http::string_body> res;
+
+    res.set("Content-Type", "application/json");
+    res.body() = boost::json::serialize(boost::json::value_from(body));
+
+    return res;
+}
+
+// Attempts to parse a string as a JSON into an object of type T.
+// T should be a type with Boost.Describe metadata.
+template <class T>
+boost::system::result<T> parse_json(std::string_view json_string) {
+    // Attempt to parse the request into a json::value.
+    // This will fail if the provided body isn't valid JSON.
+    boost::system::error_code ec;
+    auto val = boost::json::parse(json_string, ec);
+    if (ec) {
+        return ec;
+    }
+
+    // Attempt to parse the json::value into a T. This will
+    // fail if the provided JSON doesn't match T's shape.
+    return boost::json::try_value_to<T>(val);
+}
+
+template <typename T>
+concept JsonSerializable = requires(const T& t, nlohmann::json& j) { to_json(j, t); };
+
+template <typename T>
+concept JsonDeserializable = requires(const nlohmann::json& j, T& t) { from_json(j, t); };
+
+template <JsonSerializable T>
+http::response<http::string_body> nlohmann_json_response(const T& body) {
+    http::response<http::string_body> res;
+
+    res.set("Content-Type", "application/json");
+    res.body() = nlohmann::json(body);
+
+    return res;
+}
+
+http::response<http::string_body> nlohmann_json_response(nlohmann::json&& body) {
+    http::response<http::string_body> res;
+
+    res.set("Content-Type", "application/json");
+    res.body() = std::move(body.dump());
+
+    return res;
+}
+
+template <JsonDeserializable T>
+tl::expected<T, std::string> nlohmann_parse_json(std::string_view json_string) {
+    try {
+        auto json = nlohmann::json::parse(json_string);
+        return json.get<T>();
+    } catch (const nlohmann::json::exception& e) {
+        return tl::make_unexpected(e.what());
+    }
+}
+
+http::response<http::string_body> response_from_db_error(boost::system::error_code ec) {
+    if (ec.category() == get_service_category()) {
+        switch (static_cast<ErrorCode>(ec.value())) {
+            case ErrorCode::NOT_FOUND:
+                return error_response(http::status::not_found, "user does not exist");
+            case ErrorCode::USER_OR_EMAIL_EXIST:
+                return error_response(http::status::conflict, "user or email conflict");
+            default:
+                return internal_server_error();
+        }
+    } else {
+        return internal_server_error();
+    }
+}
+
+// Contains data associated to an HTTP request.
+// To be passed to individual handler functions
+struct RequestData {
+    const http::request<http::string_body>& request;
+    boost::urls::url_view target;
+
+    mysql::connection_pool& mysql_pool;
+    boost::redis::connection& redis_conn;
+    std::shared_ptr<grpc::Channel>& grpc_channel;
+
+    UserRepo user_repo;
+};
+
+Dispatcher::Dispatcher(std::shared_ptr<boost::asio::io_context>& ioc)
+    : redis_conn_(std::make_shared<boost::redis::connection>(*ioc)),
+      mysql_conn_(std::make_shared<MysqlConnPool>(ioc)) {}
+
+asio::awaitable<http::response<http::string_body>> get_test(const RequestData& input) {
+    // auto ostream = boost::beast::ostream(res.body());
+    std::ostringstream ostream;
     ostream << "receive get_test req" << "\n";
-    auto& view = uri.value();
-    for (const auto& param : view.params()) {
+    for (const auto& param : input.target.params()) {
         ostream << param.key << " = " << param.value << '\n';
     }
 
-    return ErrorCode::SUCCESS;
+    http::response<http::string_body> res;
+    res.result(http::status::ok);
+    res.set(http::field::content_type, "text/plain");
+    res.body() = ostream.str();
+    co_return res;
 }
 
-ErrorCode get_verify_code(std::shared_ptr<HttpConnection>& connection,
-                          const std::shared_ptr<Dispatcher::GrpcClient>& grpc_client) {
-    auto body = boost::beast::buffers_to_string(connection->request().body().data());
-    std::cout << "body: " << body << "\n";
+struct GetVerifyCodeRequest {
+    std::string email;
+};
+BOOST_DESCRIBE_STRUCT(GetVerifyCodeRequest, (), (email))
 
-    try {
-        auto json = nlohmann::json::parse(body);
-        auto email = json["email"];
-        auto rpc_result = grpc_client->verify_service_client_->get_verify_code(email);
+struct GetVerifyCodeResponse {
+    std::string email;
+    std::string code;
+};
+BOOST_DESCRIBE_STRUCT(GetVerifyCodeResponse, (), (email, code))
 
-        nlohmann::json result;
-        if (rpc_result) {
-            result = {
-                "status",
-                static_cast<uint8_t>(ErrorCode::SUCCESS),
-                "data",
-                {{"email", email}, {"code", rpc_result.value().code()}},
-            };
-        } else {
-            result = {
-                "status",
-                static_cast<uint8_t>(ErrorCode::RPC_FAILED),
-                "data",
-                {{"email", email}},
-            };
-        }
-
-        connection->response().set(http::field::content_type, "application/json");
-        boost::beast::ostream(connection->response().body()) << result.dump() << "\r\n";
-    } catch (const nlohmann::json::parse_error& e) {
-        std::cout << "parse error: " << e.what() << "\n";
-        return ErrorCode::INVALID_JSON;
+asio::awaitable<http::response<http::string_body>> get_verify_code(const RequestData& input) {
+    auto it = input.request.find("Content-Type");
+    if (it == input.request.end() || it->value() != "application/json") {
+        co_return bad_request("Invalid Content-Type: expected 'application/json'");
     }
 
-    return ErrorCode::SUCCESS;
+    // Parse the request body
+    auto req = parse_json<GetVerifyCodeRequest>(input.request.body());
+    // nlohmann::json::parse(input.request.body);
+    if (req.has_error()) {
+        co_return bad_request("Invalid JSON body");
+    }
+
+    VerifyServiceClient verify_service_client(input.grpc_channel);
+    auto rpc_result = verify_service_client.get_verify_code(req.value().email);
+    if (!rpc_result) {
+        co_return internal_server_error();
+    }
+
+    auto res = GetVerifyCodeResponse{req.value().email, rpc_result.value().code()};
+    co_return json_response(res);
 }
 
-ErrorCode user_register(std::shared_ptr<HttpConnection>& connection,
-                        std::shared_ptr<boost::mysql::connection_pool> mysql_conn,
-                        std::shared_ptr<boost::redis::connection> redis_conn) {
-    auto body = boost::beast::buffers_to_string(connection->request().body().data());
-    std::cout << "body: " << body << "\n";
+nlohmann::json response_payload(nlohmann::json&& body, ServiceError err = ServiceError::SUCCESS,
+                                const std::string& msg = "") {
+    nlohmann::json j = {{"data", body}};
+    j["status"] = static_cast<uint8_t>(err);
+    j["message"] = msg;
+    return j;
+}
 
-    UserRegisterRequest request;
-    try {
-        request = nlohmann::json::parse(body).get<UserRegisterRequest>();
-    } catch (const nlohmann::json::parse_error& e) {
-        std::cout << "parse error: " << e.what() << "\n";
-        return ErrorCode::INVALID_JSON;
+nlohmann::json response_payload(ServiceError err, const std::string& msg = "") {
+    nlohmann::json j = {{"data", {}}};
+    j["status"] = static_cast<uint8_t>(err);
+    j["message"] = msg;
+    return j;
+}
+
+asio::awaitable<http::response<http::string_body>> user_register(const RequestData& input) {
+    auto request = nlohmann_parse_json<UserRegisterRequest>(input.request.body());
+    if (!request) {
+        co_return bad_request("Invalid JSON body");
     }
 
     // 查询redis verify code是否匹配
     boost::redis::request req;
-    req.push("GET", request.email);
+    req.push("GET", request.value().email);
     boost::redis::response<std::optional<std::string>> resp;
 
-    // TODO 改成异步
-    // 用 use_future,阻塞等结果,不用改成协程
-    // 致命前提:调用 .get() 这个动作,必须发生在跟"驱动这个 io_context 事件循环"不同的线程上。
-    // 此处get()是在子线程的io_context, redis_conn_使用的是main的io_context
-    auto fut = redis_conn->async_exec(req, resp, boost::asio::use_future);
-    fut.get();  // 阻塞在这里,等 redis 操作真正完成
-
+    // TODO timeout
+    co_await input.redis_conn.async_exec(req, resp);
     auto result = std::get<0>(resp).value();
-    if (!result || result.value() != request.verify_code) {
-        return ErrorCode::INVALID_VERIFY_CODE;
+    if (!result || result.value() != request.value().verify_code) {
+        co_return nlohmann_json_response(
+            response_payload(ServiceError::INVALID_VERIFY_CODE, "Invalid verify code"));
     }
 
-    // 查数据库,异步接口,同样模式
-    auto user_repo = UserRepo(mysql_conn);
-    auto user_info = user_repo.create_user(request);
-    // TODO 修改create_user 返回error为状态码
-    if (!user_info && user_info.error() == "user or email exist") {
-        return ErrorCode::USER_OR_EMAIL_EXIST;
+    std::cout << "redis verify code match\n";
+    auto user_info = co_await input.user_repo.create_user(request.value());
+    if (!user_info && user_info.error() == ServiceError::USER_OR_EMAIL_EXIST) {
+        co_return nlohmann_json_response(
+            response_payload(ServiceError::USER_OR_EMAIL_EXIST, "User or email exist"));
     }
 
-    if (user_info) {
-        boost::beast::ostream(connection->response().body())
-            << boost::json::serialize(boost::json::value_from(user_info.value())) << "\r\n";
-    } else {
-        return ErrorCode::FAILED;
+    co_return nlohmann_json_response(response_payload(user_info.value()));
+}
+
+asio::awaitable<http::response<http::string_body>> Dispatcher::handle_request(
+    const http::request<http::string_body>& request) {
+    auto target = boost::urls::parse_origin_form(request.target());
+    if (!target.has_value()) {
+        co_return bad_request("Invalid request target");
     }
-    return ErrorCode::SUCCESS;
+
+    auto [it1, it2] = handlers_.equal_range(target->path());
+    if (it1 == handlers_.end()) {
+        co_return error_response(http::status::not_found, "The requested endpoint does not exist");
+    }
+
+    // Match the verb. The table structure that we created
+    // allows us to distinguish between an "endpoint does not exist" error
+    // and an "unsupported method" error.
+    auto it3 =
+        std::find_if(it1, it2, [&request](const std::pair<std::string_view, HttpHandler>& handler) {
+            return handler.second.method == request.method();
+        });
+    if (it3 == it2) {
+        co_return error_response(http::status::method_not_allowed, "Unsupported HTTP method");
+    }
+
+    // Invoke the handler
+    try {
+        // Attempt to handle the request
+        co_return co_await it3->second.handler(RequestData{request, *target, *mysql_conn_->pool(),
+                                                           *redis_conn_, grpc_channel_,
+                                                           UserRepo(mysql_conn_->pool())});
+    } catch (const mysql::error_with_diagnostics& err) {
+        // A Boost.MySQL error. This will happen if you don't have connectivity
+        // to your database, your schema is incorrect or your credentials are invalid.
+        // Log the error, including diagnostics
+        log_mysql_error(err.code(), err.get_diagnostics());
+
+        // Never disclose error info to a potential attacker
+        co_return internal_server_error();
+    } catch (const std::exception& err) {
+        // Another kind of error. This indicates a programming error or a severe
+        // server condition (e.g. out of memory). Same procedure as above.
+        {
+            auto guard = lock_cerr();
+            std::cerr << "Uncaught exception: " << err.what() << std::endl;
+        }
+        co_return internal_server_error();
+    }
 }
 
 void redis_config_init(const RedisConfig& redis_config, boost::redis::config& cfg) {
@@ -141,102 +327,39 @@ void redis_config_init(const RedisConfig& redis_config, boost::redis::config& cf
 }
 
 int Dispatcher::init(const Config& config) {
+    // grpc
     auto target =
         config.rpc_server_config.host + ":" + std::to_string(config.rpc_server_config.port);
-    channel_ = std::shared_ptr<grpc::Channel>(
+    grpc_channel_ = std::shared_ptr<grpc::Channel>(
         grpc::CreateChannel(target, grpc::InsecureChannelCredentials()));
-    if (!channel_) {
+    if (!grpc_channel_) {
         std::cerr << "Failed to create gRPC channel. Invalid address or port." << "\n";
         return -1;
     }
 
+    // redis
     boost::redis::config redis_cfg;
     redis_config_init(config.redis_config, redis_cfg);
-    // redis_conn_->async_run(redis_cfg, asio::detached);
-    redis_conn_->async_run(redis_cfg, [](boost::system::error_code ec) {
-        if (ec) {
-            std::cout << "redis conn run error:" << ec.message() << '\n';
-        }
-    });
+    redis_conn_->async_run(redis_cfg, asio::consign(asio::detached, redis_conn_));
 
+    // mysql
     mysql_conn_->init(config.mysql_config);
     mysql_conn_->pool()->async_run(asio::detached);
 
-    grpc_client_ = std::make_shared<GrpcClient>();
-    grpc_client_->verify_service_client_ = std::make_unique<VerifyServiceClient>(channel_);
-
-    register_get_handler("/get_test", get_test);
-    register_post_handler("/get_verify_code", [client = grpc_client_](auto conn) -> ErrorCode {
-        return get_verify_code(conn, client);
-    });
-    register_post_handler(
-        "/user_register",
-        [mysql_conn = mysql_conn_->pool(), redis_conn = redis_conn_](auto conn) -> ErrorCode {
-            return user_register(conn, mysql_conn, redis_conn);
-        });
-
+    handlers_init();
     return 0;
 }
 
-ErrorCode Dispatcher::handle_get_request(std::shared_ptr<HttpConnection> conn,
-                                         const std::string& path) {
-    auto it = get_handlers_.find(path);
-    if (it != get_handlers_.end()) {
-        return it->second(conn);
-    }
-    std::cerr << "invalid get request path: " << path << "\n";
-    return ErrorCode::NOT_FOUND;
+void Dispatcher::handlers_init() {
+    handlers_.insert({"/get_test", HttpHandler(http::verb::get, get_test)});
+    handlers_.insert({"/get_verify_code", HttpHandler(http::verb::post, get_verify_code)});
+    handlers_.insert({"/user_register", HttpHandler(http::verb::post, user_register)});
 }
 
-void Dispatcher::register_get_handler(const std::string& path, HttpHandler handler) {
-    get_handlers_[path] = std::move(handler);
+void Dispatcher::register_get_handler(const std::string& path, RequestHandler&& handler) {
+    handlers_.insert({path, HttpHandler(http::verb::get, std::move(handler))});
 }
 
-ErrorCode Dispatcher::handle_post_request(std::shared_ptr<HttpConnection> conn,
-                                          const std::string& path) {
-    auto it = post_handlers_.find(path);
-    if (it != post_handlers_.end()) {
-        return it->second(conn);
-    }
-    std::cerr << "invalid post request path: " << path << "\n";
-    return ErrorCode::NOT_FOUND;
-}
-
-void Dispatcher::register_post_handler(const std::string& path, HttpHandler handler) {
-    post_handlers_[path] = std::move(handler);
-}
-
-void response_set_by_code(http::response<http::dynamic_body>& response, ErrorCode code) {
-    if (code != ErrorCode::SUCCESS) {
-        response.set(http::field::content_type, "text/plain");
-    }
-
-    switch (code) {
-        case ErrorCode::SUCCESS:
-            response.result(http::status::ok);
-            break;
-        case ErrorCode::FAILED:
-        case ErrorCode::RPC_FAILED:
-            response.result(http::status::internal_server_error);
-            break;
-        case ErrorCode::NOT_FOUND:
-            response.result(http::status::not_found);
-            boost::beast::ostream(response.body()) << "url not found\r\n";
-            break;
-        case ErrorCode::TIMEOUT:
-            response.result(http::status::request_timeout);
-            break;
-        case ErrorCode::INVALID_JSON: {
-            response.result(http::status::bad_request);
-            response.set(http::field::content_type, "application/json");
-            nlohmann::json error{{"status", static_cast<uint8_t>(ErrorCode::INVALID_JSON)},
-                                 {"message", "invalid json"}};
-            boost::beast::ostream(response.body()) << error.dump() << "\r\n";
-            break;
-        }
-        case ErrorCode::UNKNOWN:
-        default:
-            response.result(http::status::bad_request);
-            break;
-    }
+void Dispatcher::register_post_handler(const std::string& path, RequestHandler&& handler) {
+    handlers_.insert({path, HttpHandler(http::verb::post, std::move(handler))});
 }

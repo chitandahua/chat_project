@@ -2,6 +2,7 @@
 #define _DISPATCHER_HPP_
 
 #include <boost/asio.hpp>
+#include <boost/asio/awaitable.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/beast/http.hpp>
@@ -16,46 +17,54 @@
 #include <grpcpp/grpcpp.h>
 #include <boost/redis/connection.hpp>
 
-#include "error_code.hpp"
+#include <boost/beast/http/string_body.hpp>
+#include <boost/beast/http/verb.hpp>
+
+#include "error.hpp"
 #include "verify_service.hpp"
 
 using namespace boost::asio::ip;
-using namespace boost::beast;
+
+namespace asio = boost::asio;
+namespace http = boost::beast::http;
 
 class Server;
 class HttpConnection;
 class Config;
 class VerifyServiceClient;
 class MysqlConnPool;
+class RequestData;
+
+using RequestHandler =
+    std::function<asio::awaitable<http::response<http::string_body>>(const RequestData&)>;
+
+class HttpHandler {
+public:
+    HttpHandler(http::verb verb, RequestHandler&& request_handler) noexcept
+        : method(verb), handler(std::move(request_handler)) {}
+
+    http::verb method;
+    RequestHandler handler;
+};
 
 class Dispatcher {
 public:
-    using HttpHandler = std::function<ErrorCode(std::shared_ptr<HttpConnection>&)>;
-    explicit Dispatcher(boost::asio::io_context& ioc);
+    explicit Dispatcher(std::shared_ptr<boost::asio::io_context>& ioc);
 
-    ErrorCode handle_get_request(std::shared_ptr<HttpConnection> conn, const std::string& path);
-    void register_get_handler(const std::string& path, HttpHandler handler);
-    ErrorCode handle_post_request(std::shared_ptr<HttpConnection> conn, const std::string& path);
-    void register_post_handler(const std::string& path, HttpHandler handler);
+    void register_get_handler(const std::string& path, RequestHandler&& handler);
+    void register_post_handler(const std::string& path, RequestHandler&& handler);
 
     int init(const Config& config);
-
-    // TODO 每加一个service都要加个字段 有没有多态或者其他方式 使用map保存之类的
-    // stub其实没必要保存 每次调用时再构造也不迟
-    class GrpcClient {
-    public:
-        std::shared_ptr<VerifyServiceClient> verify_service_client_;
-    };
+    asio::awaitable<http::response<http::string_body>> handle_request(
+        const http::request<http::string_body>& request);
 
 private:
-    std::shared_ptr<grpc::Channel> channel_;
-    std::shared_ptr<GrpcClient> grpc_client_;
+    void handlers_init();
+
+    std::shared_ptr<grpc::Channel> grpc_channel_;
     std::shared_ptr<boost::redis::connection> redis_conn_;
     std::shared_ptr<MysqlConnPool> mysql_conn_;
-    std::map<std::string, HttpHandler> get_handlers_;
-    std::map<std::string, HttpHandler> post_handlers_;
+    std::unordered_multimap<std::string_view, HttpHandler> handlers_;
 };
-
-void response_set_by_code(http::response<http::dynamic_body>& response, ErrorCode code);
 
 #endif

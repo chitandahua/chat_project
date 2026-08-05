@@ -21,7 +21,6 @@ public:
         request.set_email(email);
         grpc::Status status = verify_service_stub_->GetVerifyCode(&context, request, &response);
         if (!status.ok()) {
-            std::cerr << "get verify code error: " << status.error_message() << "\n";
             return tl::make_unexpected(status.error_message());
         }
         return response;

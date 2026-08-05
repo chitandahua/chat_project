@@ -2,104 +2,93 @@
 #include <iostream>
 
 #include "dispatcher.hpp"
+#include "error.h"
 #include "http_connection.hpp"
 #include "server.hpp"
+
+namespace asio = boost::asio;
 
 HttpConnection::HttpConnection(tcp::socket sock, std::weak_ptr<Server> server,
                                std::shared_ptr<Dispatcher>& dispatcher)
     : socket_(std::move(sock)),
-      deadline_(socket_.get_executor(), std::chrono::seconds(60)),
       dispatcher_(dispatcher),
       server_(std::move(server)),
       uuid_(boost::uuids::to_string(boost::uuids::random_generator()())) {}
 
 HttpConnection::~HttpConnection() = default;
 
-void HttpConnection::start() {
-    read_request();
-    check_deadline();
-}
+boost::asio::awaitable<void> HttpConnection::run() {
+    using namespace std::chrono_literals;
 
-void HttpConnection::read_request() {
-    http::async_read(socket_, buffer_, request_,
-                     [self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
-                         if (!ec) {
-                             self->handle_request();
-                         } else {
-                             // TODO 判断错误码等
-                             if (ec != boost::asio::error::eof) {
-                                 std::cout << "read error: " << ec.message() << "\n";
-                             }
-                             self->clean_up();
-                         }
+    boost::system::error_code ec;
+    boost::beast::flat_buffer buff;
 
-                         // TODO 长连接
-                         // if (self->request_.keep_alive()) {
-                         //     // 继续读下一个请求
-                         //     self->read_request();
-                         // }
-                     });
-}
+    // A timer, to use with asio::cancel_after to implement timeouts.
+    // Re-using the same timer multiple times with cancel_after
+    // is more efficient than using raw cancel_after,
+    // since the timer doesn't need to be re-created for every operation.
+    boost::asio::steady_timer timer(co_await asio::this_coro::executor);
 
-void HttpConnection::handle_request() {
-    std::cout << "receive request: " << request_.target() << "\n";
+    // A HTTP session might involve more than one message if
+    // keep-alive semantics are used. Loop until the connection closes.
+    while (true) {
+        http::request_parser<http::string_body> parser;
 
-    response_.version(request_.version());
-    // 短连接
-    response_.keep_alive(false);
+        parser.body_limit(10000);
 
-    ErrorCode result = ErrorCode::FAILED;
-    auto uri = boost::urls::parse_origin_form(request_.target());
-    if (uri) {
-        if (request_.method() == http::verb::get) {
-            result = dispatcher_->handle_get_request(shared_from_this(), uri.value().path());
-        } else if (request_.method() == http::verb::post) {
-            result = dispatcher_->handle_post_request(shared_from_this(), uri.value().path());
-        } else {
-            std::cerr << "invalid request method: " << request_.method() << "\n";
+        co_await http::async_read(socket_, buff, parser.get(),
+                                  asio::cancel_after(timer, 60s, asio::redirect_error(ec)));
+
+        if (ec) {
+            if (ec == http::error::end_of_stream) {
+                // This means they closed the connection
+                socket_.shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+            } else {
+                // An unknown error happened
+                log_error("Error reading HTTP request: ", ec);
+            }
+            clean_up();
+            co_return;
+        }
+
+        const auto& request = parser.get();
+
+        auto response = co_await asio::co_spawn(
+            // Use the same executor as this coroutine (it will be a strand)
+            co_await asio::this_coro::executor,
+
+            [&] { return dispatcher_->handle_request(request); },
+
+            // Completion token. Returns an object that can be co_await'ed
+            asio::cancel_after(timer, 30s));
+
+        // Adjust the response, setting fields common to all responses
+        bool keep_alive = request.keep_alive();
+        response.version(request.version());
+        response.keep_alive(keep_alive);
+        response.prepare_payload();
+
+        co_await http::async_write(socket_, response,
+                                   asio::cancel_after(timer, 60s, asio::redirect_error(ec)));
+        if (ec) {
+            log_error("Error writing HTTP response: ", ec);
+            clean_up();
+            co_return;
+        }
+
+        // This means we should close the connection, usually because
+        // the response indicated the "Connection: close" semantic.
+        if (!keep_alive) {
+            socket_.shutdown(asio::ip::tcp::socket::shutdown_send, ec);
+            clean_up();
+            co_return;
         }
     }
-    response_set_by_code(response_, result);
-    write_response();
-}
-
-void HttpConnection::write_response() {
-    response_.content_length(response_.body().size());
-    http::async_write(socket_, response_,
-                      [self = shared_from_this()](const boost::system::error_code& ec,
-                                                  std::size_t bytes_transferred) {
-                          if (!ec) {
-                              boost::system::error_code ignore_ec;
-                              self->socket_.shutdown(tcp::socket::shutdown_send, ignore_ec);
-                          } else {
-                              std::cout << "write error: " << ec.message() << "\n";
-                          }
-                          self->clean_up();
-                      });
-}
-
-void HttpConnection::check_deadline() {
-    deadline_.async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
-        if (ec == boost::asio::error::operation_aborted) {
-            return;  // cancel 说明触发了clean_up(无论读写哪个触发的) 然后会很快触发析构了
-                     // socket_也会close掉
-        }
-        if (ec) {
-            std::cout << "deadline error: " << ec.message() << "\n";
-        }
-
-        std::cout << "connection[" << self->get_uuid() << "] timeout\n";
-        // 超时关闭 关闭一个 socket,会强制取消这个 socket 上所有还挂起的异步操作
-        // :调用 check_deadline() 意味着当前一定还有别的异步操作正在这个连接上挂着(要么
-        // read_request() 的 async_read 还在等客户端把请求发完整,要么 write_response() 的
-        // async_write 还在等数据发出去)。close() 一执行 就会触发读/写里面的 clean_up()
-        self->socket_.close();
-    });
 }
 
 void HttpConnection::clean_up() {
     std::cout << "clean connection\n";
-    deadline_.cancel();
+
     if (auto server = server_.lock()) {
         server->clear_session(get_uuid());
     }

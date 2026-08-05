@@ -1,4 +1,5 @@
 #include <boost/asio.hpp>
+#include <boost/asio/co_spawn.hpp>
 #include <boost/asio/signal_set.hpp>
 #include <csignal>
 #include <iostream>
@@ -16,9 +17,10 @@ int main() {
         tcp::endpoint endpoint(boost::asio::ip::make_address(config.server_config.host),
                                config.server_config.port);
 
-        boost::asio::io_context io_context;
+        std::shared_ptr<boost::asio::io_context> io_context =
+            std::make_shared<boost::asio::io_context>();
         auto server = std::make_shared<Server>(io_context, std::move(endpoint));
-        boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
+        boost::asio::signal_set signals(*io_context, SIGINT, SIGTERM);
         signals.async_wait([&, server](const boost::system::error_code& error, int signal_number) {
             if (signal_number == SIGINT) {
                 std::cout << "SIGINT received" << "\n";
@@ -26,13 +28,18 @@ int main() {
                 std::cout << "SIGTERM received" << "\n";
             }
             server->stop();
-            io_context.stop();
+            io_context->stop();
         });
 
-        if (server->run(config) < 0) {
+        if (server->init(config) < 0) {
             return -1;
         }
-        io_context.run();
+        boost::asio::co_spawn(*io_context, server->run(), [](std::exception_ptr exc) {
+            if (exc)
+                std::rethrow_exception(exc);
+        });
+
+        io_context->run();
     } catch (std::exception& e) {
         std::cerr << e.what() << "\n";
     }

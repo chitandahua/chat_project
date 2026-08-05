@@ -5,6 +5,7 @@
 #include <boost/mysql/static_results.hpp>
 #include <boost/mysql/string_view.hpp>
 
+#include <boost/asio/awaitable.hpp>
 #include <boost/asio/spawn.hpp>
 #include <boost/optional/optional.hpp>
 
@@ -14,60 +15,51 @@
 #include <memory>
 
 #include <tl/expected.hpp>
+#include "error.hpp"
 #include "nlohmann/json.hpp"
-
-struct UserInfo {
-    int64_t id;
-    std::string user;
-    std::string email;
-    std::string passwd;
-};
-BOOST_DESCRIBE_STRUCT(UserInfo, (), (id, user, email, passwd))
 
 class UserRegisterRequest {
 public:
     std::string user;
     std::string email;
     std::string passwd;
+    std::string confirm_passwd;
     std::string verify_code;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserRegisterRequest, user, email, passwd, confirm_passwd,
+                                   verify_code)
+};
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserRegisterRequest, user, email, passwd, verify_code)
+class UserRegisterResponse {
+public:
+    int64_t id;
+    std::string user;
+    std::string email;
+    std::string passwd;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserRegisterResponse, id, user, email, passwd)
 };
 
 class UserRepo {
 public:
     UserRepo(std::shared_ptr<boost::mysql::connection_pool>& pool) noexcept : pool_(pool) {}
 
-    auto create_user(const UserRegisterRequest& req) -> tl::expected<UserInfo, std::string> {
+    auto create_user(const UserRegisterRequest& req) const
+        -> boost::asio::awaitable<tl::expected<UserRegisterResponse, ServiceError>> {
         try {
-            boost::mysql::pooled_connection conn =
-                pool_->async_get_connection(boost::asio::use_future).get();
-
-            boost::mysql::statement stmt =
-                conn->async_prepare_statement(
-                        "INSERT INTO user (user, email, passwd) VALUES (?, ?, ?)",
-                        boost::asio::use_future)
-                    .get();
+            auto conn = co_await pool_->async_get_connection();
+            auto stmt = co_await conn->async_prepare_statement(
+                "INSERT INTO user (name, email, pwd) VALUES (?, ?, ?)");
 
             boost::mysql::static_results<std::tuple<>> result;
-            conn->async_execute(stmt.bind(req.user, req.email, req.passwd), result,
-                                boost::asio::use_future)
-                .get();
+            co_await conn->async_execute(stmt.bind(req.user, req.email, req.passwd), result);
 
             auto new_id = static_cast<std::int64_t>(result.last_insert_id());
-            if (new_id == 0) {
-                return tl::make_unexpected("insert failed: no id generated");
-            }
 
-            return UserInfo{new_id, req.user, req.email, req.passwd};
+            co_return UserRegisterResponse{new_id, req.user, req.email, req.passwd};
         } catch (const boost::mysql::error_with_diagnostics& e) {
             if (e.code().value() == 1062) {
-                return tl::make_unexpected(std::string("user or email exist"));
+                co_return tl::make_unexpected(ServiceError::USER_OR_EMAIL_EXIST);
             }
-            return tl::make_unexpected(
-                std::string(e.what()));  // + " | " +e.get_diagnostics().server_message()
-        } catch (const std::exception& e) {
-            return tl::make_unexpected(e.what());
+            throw;
         }
     }
 

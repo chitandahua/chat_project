@@ -2,6 +2,7 @@
 #define _HTTP_CONNECTION_HPP_
 
 #include <boost/asio.hpp>
+#include <boost/asio/awaitable.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/http.hpp>
@@ -27,39 +28,15 @@ public:
     HttpConnection& operator=(HttpConnection&&) noexcept = default;
     ~HttpConnection();
 
-    void start();
+    boost::asio::awaitable<void> run();
     const std::string& get_uuid() {
         return uuid_;
     }
 
-    auto& response() {
-        return response_;
-    }
-
-    const auto& response() const {
-        return response_;
-    }
-
-    auto& request() {
-        return request_;
-    }
-
-    const auto& request() const {
-        return request_;
-    }
-
 private:
-    void check_deadline();
-    void write_response();
-    void read_request();
-    void handle_request();
     void clean_up();
 
     tcp::socket socket_;
-    boost::beast::flat_buffer buffer_{8192};
-    http::request<http::dynamic_body> request_;
-    http::response<http::dynamic_body> response_;
-    boost::asio::steady_timer deadline_;
     std::shared_ptr<Dispatcher> dispatcher_;
     std::weak_ptr<Server> server_;
     std::string uuid_;
