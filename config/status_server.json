@@ -9,13 +9,6 @@
         "user": "",
         "pass": ""
     },
-    "mysql": {
-        "host": "127.0.0.1",
-        "port": 3306,
-        "user": "",
-        "pass": "",
-        "database": "chat_project"
-    },
     "chat_servers": [
         {
             "host": "127.0.0.1",
