@@ -1,0 +1,17 @@
+{
+    "server": {
+        "host": "127.0.0.1",
+        "port": 18080
+    },
+    "status_server": {
+        "host": "127.0.0.1",
+        "port": 10088
+    },
+    "mysql": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "",
+        "pass": "",
+        "database": "chat_project"
+    }
+}

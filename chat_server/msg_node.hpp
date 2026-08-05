@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <string>
+
 // 线上格式(依次紧挨着,不含任何 padding):
 //   [id: ID_LEN 字节][body_length: HEAD_LEN 字节][body: 变长,最长 MAX_LENGTH]
 class MsgNode {
@@ -15,6 +17,19 @@ public:
     static constexpr int ID_LEN = 4;                      // uint32_t,请求/回复用来配对
     static constexpr int HEAD_LEN = 2;                    // body 长度
     static constexpr int PREFIX_LEN = ID_LEN + HEAD_LEN;  // 头部总长度,先读这么多字节
+
+    MsgNode() = default;
+    MsgNode(uint32_t id, const char* body) : id_(id) {
+        // TODO 检查body_length
+        if (body) {
+            set_body_length(strlen(body));
+            encode_header();
+            memcpy(data_ + PREFIX_LEN, body, body_length_);
+        } else {
+            encode_header();
+        }
+    }
+    MsgNode(uint32_t id, std::string&& body) : MsgNode(id, body.c_str()) {}
 
     const char* data() const {
         return data_;

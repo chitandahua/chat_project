@@ -7,7 +7,12 @@
 
 #include <boost/asio/experimental/concurrent_channel.hpp>
 
+#include <boost/mysql/connection_pool.hpp>
+
+#include "config.hpp"
+#include "handle_message.hpp"
 #include "msg_node.hpp"
+
 using namespace boost;
 
 using asio::awaitable;
@@ -53,11 +58,12 @@ public:
     chat_session(tcp::socket socket, chat_room& room)
         : socket_(std::move(socket)), room_(room), channel_(socket_.get_executor(), 64) {}
 
-    void start() {
+    void start(std::shared_ptr<MessageHandler>& handler) {
         room_.join(shared_from_this());
 
         co_spawn(
-            socket_.get_executor(), [self = shared_from_this()] { return self->reader(); },
+            socket_.get_executor(),
+            [self = shared_from_this(), handler = handler] { return self->reader(handler); },
             detached);
 
         co_spawn(
@@ -66,6 +72,8 @@ public:
     }
 
     void deliver(const MsgNode& msg) {
+        std::cout << "deliver msg id=" << msg.id() << " length=" << msg.length()
+                  << " body=" << msg.body() << "\n";
         bool ok = channel_.try_send(boost::system::error_code{}, std::make_shared<MsgNode>(msg));
         if (!ok) {
             // 至少打个日志,方便排查是不是消费跟不上生产
@@ -74,7 +82,7 @@ public:
     }
 
 private:
-    awaitable<void> reader() {
+    awaitable<void> reader(const std::shared_ptr<MessageHandler>& handler) {
         try {
             for (MsgNode read_msg;;) {
                 co_await asio::async_read(socket_,
@@ -89,7 +97,7 @@ private:
                     socket_, boost::asio::buffer(read_msg.body(), read_msg.body_length()),
                     use_awaitable);
 
-                deliver(read_msg);
+                deliver(co_await handler->handle_message(read_msg));
             }
         } catch (std::exception&) {
             stop();
@@ -122,12 +130,12 @@ private:
 
 //----------------------------------------------------------------------
 
-awaitable<void> listener(tcp::acceptor acceptor) {
+awaitable<void> listener(tcp::acceptor acceptor, std::shared_ptr<MessageHandler> handler) {
     chat_room room;
 
     for (;;) {
         std::make_shared<chat_session>(co_await acceptor.async_accept(use_awaitable), room)
-            ->start();
+            ->start(handler);
     }
 }
 
@@ -135,18 +143,42 @@ awaitable<void> listener(tcp::acceptor acceptor) {
 
 int main(int argc, char* argv[]) {
     try {
-        if (argc < 2) {
-            std::cerr << "Usage: coroutines_server_v3 <port> [<port> ...]\n";
-            return 1;
+        ChatConfig config;
+        if (config.init("../config/chat_server.json") != 0) {
+            return -1;
         }
 
         constexpr int threads_num = 4;
         asio::io_context io_context(threads_num);
 
-        for (int i = 1; i < argc; ++i) {
-            unsigned short port = std::atoi(argv[i]);
-            co_spawn(io_context, listener(tcp::acceptor(io_context, {tcp::v4(), port})), detached);
+        std::shared_ptr<boost::mysql::connection_pool> pool =
+            std::make_shared<boost::mysql::connection_pool>(
+                io_context,
+                mysql::pool_params{
+                    .server_address =
+                        mysql::host_and_port{config.mysql.host,
+                                             static_cast<unsigned short>(config.mysql.port)},
+                    .username = config.mysql.user,
+                    .password = config.mysql.pass,
+
+                    .database = config.mysql.database,
+                    .multi_queries = true,
+                    .thread_safe = true,
+                });
+        pool->async_run(asio::detached);
+
+        std::shared_ptr<MessageHandler> handler = std::make_shared<MessageHandler>(pool);
+        if (handler->init(config) != 0) {
+            return -1;
         }
+
+        co_spawn(io_context,
+                 listener(tcp::acceptor(io_context,
+                                        boost::asio::ip::tcp::endpoint(
+                                            boost::asio::ip::make_address(config.server.host),
+                                            config.server.port)),
+                          std::move(handler)),
+                 detached);
 
         asio::signal_set signals(io_context, SIGINT, SIGTERM);
         signals.async_wait([&](auto, auto) { io_context.stop(); });
