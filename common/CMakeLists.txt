@@ -14,7 +14,7 @@ add_library(common INTERFACE)
 
 target_include_directories(common
     INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 # 如果有外部依赖，也在这里声明

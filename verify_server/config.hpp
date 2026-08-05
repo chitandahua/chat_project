@@ -6,6 +6,15 @@
 #include <string>
 
 #include "nlohmann/json.hpp"
+#include "redis_client.hpp"
+
+class ServerConfig {
+public:
+    std::string host;
+    int port;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ServerConfig, host, port)
+};
 
 class EmailConfig {
 public:
@@ -13,16 +22,6 @@ public:
     std::string pass;
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(EmailConfig, user, pass)
-};
-
-class RedisConfig {
-public:
-    std::string host;
-    int port;
-    std::string user;
-    std::string pass;
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(RedisConfig, host, port, user, pass)
 };
 
 class VerifyConfig {
@@ -45,10 +44,11 @@ public:
         return 0;
     }
 
+    ServerConfig server;
     EmailConfig email;
     RedisConfig redis;
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(VerifyConfig, email, redis)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(VerifyConfig, server, email, redis)
 };
 
 #endif

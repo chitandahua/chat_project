@@ -6,6 +6,18 @@
 #include <boost/redis/connection.hpp>
 #include <boost/redis/src.hpp>
 
+#include "nlohmann/json.hpp"
+
+class RedisConfig {
+public:
+    std::string host;
+    int port;
+    std::string user;
+    std::string pass;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(RedisConfig, host, port, user, pass)
+};
+
 class RedisClient : std::enable_shared_from_this<RedisClient> {
 private:
     int get_config(const RedisConfig& redis_config, boost::redis::config& cfg) {
