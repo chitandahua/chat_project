@@ -220,6 +220,10 @@ asio::awaitable<http::response<http::string_body>> get_verify_code(const Request
     auto rpc_result = verify_service_client.get_verify_code(req.value().email);
     if (!rpc_result) {
         co_return internal_server_error();
+    } else if (rpc_result.value().error() != 0) {
+        // std::cerr << "rpc result error: " << rpc_result.value().error() << "\n";
+        co_return internal_server_error();
+        // co_return nlohmann_json_response(response_payload_empty(ServiceError::RPC_RETURN_ERROR));
     }
 
     auto res = GetVerifyCodeResponse{req.value().email, rpc_result.value().code()};
@@ -323,7 +327,10 @@ asio::awaitable<http::response<http::string_body>> user_login(const RequestData&
     // TODO 改为异步
     auto response = StatusServiceClient::get_chat_server(input.status_grpc_channel, result.value());
     if (!response) {
-        co_return nlohmann_json_response(response_payload_empty(response.error()));
+        co_return internal_server_error();
+        // co_return nlohmann_json_response(response_payload_empty(response.error()));
+    } else if (response.value().error() != 0) {
+        co_return nlohmann_json_response(response_payload_empty(ServiceError::RPC_RETURN_ERROR));
     }
 
     co_return nlohmann_json_response(response_payload(

@@ -15,10 +15,11 @@ enum class ServiceError : uint8_t {
     NOT_FOUND = 1,
     INVALID_JSON = 3,
     RPC_FAILED = 4,
-    INVALID_VERIFY_CODE = 5,
-    USER_OR_EMAIL_EXIST = 6,
-    USER_OR_EMAIL_INVALID = 7,
-    USER_OR_PASSWORD_INVALID = 8,
+    RPC_RETURN_ERROR = 5,
+    INVALID_VERIFY_CODE,
+    USER_OR_EMAIL_EXIST,
+    USER_OR_EMAIL_INVALID,
+    USER_OR_PASSWORD_INVALID,
 };
 
 inline const char* ServiceError2String(ServiceError err) {
@@ -30,6 +31,7 @@ inline const char* ServiceError2String(ServiceError err) {
         case ServiceError::INVALID_JSON:
             return "Invalid json";
         case ServiceError::RPC_FAILED:
+        case ServiceError::RPC_RETURN_ERROR:
             // return "RPC failed";
             return "Internal server error";
         case ServiceError::INVALID_VERIFY_CODE:
