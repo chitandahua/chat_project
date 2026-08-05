@@ -18,6 +18,8 @@ public:
         params.username = cfg.user;
         params.password = cfg.pass;
         params.database = cfg.database;
+        params.multi_queries = true;
+        params.thread_safe = true;
 
         pool_ = std::make_shared<boost::mysql::connection_pool>(*ioc_, std::move(params));
     }
