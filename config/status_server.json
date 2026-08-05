@@ -1,0 +1,29 @@
+{
+    "server": {
+        "host": "127.0.0.1",
+        "port": 10088
+    },
+    "redis": {
+        "host": "127.0.0.1",
+        "port": 6379,
+        "user": "",
+        "pass": ""
+    },
+    "mysql": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "",
+        "pass": "",
+        "database": "chat_project"
+    },
+    "chat_servers": [
+        {
+            "host": "127.0.0.1",
+            "port": 18080
+        },
+        {
+            "host": "127.0.0.1",
+            "port": 18081
+        }
+    ]
+}
