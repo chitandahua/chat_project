@@ -169,7 +169,12 @@ asio::awaitable<void> save_user_info(const MessageData& input, const std::string
     co_await input.redis_client->conn_->async_exec(
         set_req, set_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
     if (ec) {
-        std::cerr << "redis set error: " << ec.message() << std::endl;
+        std::cerr << "redis set error (transport/adapt): " << ec.message() << std::endl;
+    }
+
+    auto result = std::get<0>(set_resp);
+    if (result.has_error()) {
+        std::cerr << "redis set error (server): " << result.error().diagnostic << std::endl;
     }
     co_return;
 }

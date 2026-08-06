@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
             } else if (signal_number == SIGTERM) {
                 std::cout << "SIGTERM received" << "\n";
             }
+            redis_client->conn_->cancel();
             server->Shutdown();
             ioc->stop();
         });

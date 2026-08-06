@@ -54,7 +54,13 @@ public:
         co_await redis_client_->conn_->async_exec(
             set_req, set_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
         if (ec) {
-            std::cerr << "redis set error: " << ec.message() << std::endl;
+            std::cerr << "redis set error (transport/adapt): " << ec.message() << std::endl;
+            co_return tl::make_unexpected(-1);
+        }
+
+        auto result = std::get<0>(set_resp);
+        if (result.has_error()) {
+            std::cerr << "redis set error (server): " << result.error().diagnostic << std::endl;
             co_return tl::make_unexpected(-1);
         }
         co_return code;
