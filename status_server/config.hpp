@@ -10,10 +10,11 @@
 
 class ServerConfig {
 public:
+    std::string name;
     std::string host;
     int port;
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ServerConfig, host, port)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ServerConfig, name, host, port)
 };
 
 class EmailConfig {

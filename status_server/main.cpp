@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
         std::shared_ptr<boost::asio::io_context> ioc = std::make_shared<boost::asio::io_context>();
         boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard =
             boost::asio::make_work_guard(*ioc);
+        auto redis_client = std::make_shared<RedisClient>();
 
         // grpc server
         const std::string server_address =
@@ -38,7 +39,7 @@ int main(int argc, char** argv) {
         ServerBuilder builder;
         builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
 
-        StatusServiceImpl service(ioc, config.chat_servers);
+        StatusServiceImpl service(ioc, redis_client, config.chat_servers);
         builder.RegisterService(&service);
 
         std::shared_ptr<Server> server(builder.BuildAndStart());
@@ -56,8 +57,15 @@ int main(int argc, char** argv) {
                 std::cout << "SIGTERM received" << "\n";
             }
             server->Shutdown();
+            redis_client->conn_->cancel();
             work_guard.reset();
             // ioc->stop();
+        });
+
+        // redis
+        boost::asio::co_spawn(*ioc, redis_client->run(config.redis), [](std::exception_ptr p) {
+            if (p)
+                std::rethrow_exception(p);
         });
 
         ioc->run();
