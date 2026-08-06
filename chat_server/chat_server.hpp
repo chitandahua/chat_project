@@ -27,11 +27,13 @@ class ChatParticipant {
 public:
     virtual ~ChatParticipant() {}
     virtual void deliver(const MsgNode& msg) = 0;
+    virtual void deliver(MsgNode&& msg) = 0;
+    virtual int64_t uid() = 0;
 };
 
 typedef std::shared_ptr<ChatParticipant> ChatParticipantPtr;
 
-class ChatServer {
+class ChatServer : std::enable_shared_from_this<ChatServer> {
 public:
     explicit ChatServer(const std::string& server_name) : server_name_(server_name) {}
 
@@ -55,6 +57,16 @@ public:
         return server_name_;
     }
 
+    std::shared_ptr<ChatParticipant> get_participant(int64_t uid) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& participant : participants_) {
+            if (participant->uid() == uid) {
+                return participant;
+            }
+        }
+        return nullptr;
+    }
+
 private:
     std::string server_name_;
     mutable std::mutex mutex_;
@@ -63,11 +75,13 @@ private:
 
 class ChatSession : public ChatParticipant, public std::enable_shared_from_this<ChatSession> {
 public:
-    ChatSession(tcp::socket socket, ChatServer& server)
+    ChatSession(tcp::socket socket, const std::shared_ptr<ChatServer>& server)
         : socket_(std::move(socket)), server_(server), channel_(socket_.get_executor(), 64) {}
 
     void start(std::shared_ptr<MessageHandler>& handler) {
-        server_.join(shared_from_this());
+        if (auto server = server_.lock()) {
+            server->join(shared_from_this());
+        }
 
         co_spawn(
             socket_.get_executor(),
@@ -79,10 +93,19 @@ public:
             detached);
     }
 
-    void deliver(const MsgNode& msg) {
+    void deliver(const MsgNode& msg) override {
         std::cout << "deliver msg id=" << msg.id() << " length=" << msg.length()
                   << " body=" << msg.body() << "\n";
         bool ok = channel_.try_send(boost::system::error_code{}, std::make_shared<MsgNode>(msg));
+        if (!ok) {
+            // 至少打个日志,方便排查是不是消费跟不上生产
+            std::cerr << "channel full, message dropped for session\n";
+        }
+    }
+
+    void deliver(MsgNode&& msg) override {
+        bool ok = channel_.try_send(boost::system::error_code{},
+                                    std::make_shared<MsgNode>(std::move(msg)));
         if (!ok) {
             // 至少打个日志,方便排查是不是消费跟不上生产
             std::cerr << "channel full, message dropped for session\n";
@@ -93,8 +116,12 @@ public:
         uid_ = uid;
     }
 
-    ChatServer& server() {
-        return server_;
+    virtual int64_t uid() override {
+        return uid_;
+    }
+
+    std::shared_ptr<ChatServer> server() {
+        return server_.lock();
     }
 
 private:
@@ -139,12 +166,14 @@ private:
     }
 
     void stop() {
-        server_.leave(shared_from_this());
+        if (auto server = server_.lock()) {
+            server->leave(shared_from_this());
+        }
         socket_.close();
     }
 
     tcp::socket socket_;
-    ChatServer& server_;
+    std::weak_ptr<ChatServer> server_;
     asio::experimental::concurrent_channel<void(boost::system::error_code,
                                                 std::shared_ptr<MsgNode>)>
         channel_;

@@ -10,7 +10,24 @@ enum class MessageId : uint16_t {
     LoginResponse = 1006,
     SearchUserRequest = 1007,
     SearchUserResponse = 1008,
+    AddFriendRequest = 1009,
+    AddFriendResponse = 1010,
+    NotifyAddFriend = 1011,
+    InvalidRequest = 1500,
 };
+
+inline MessageId get_response_id(MessageId id) {
+    switch (id) {
+        case MessageId::LoginRequest:
+            return MessageId::LoginResponse;
+        case MessageId::SearchUserRequest:
+            return MessageId::SearchUserResponse;
+        case MessageId::AddFriendRequest:
+            return MessageId::AddFriendResponse;
+        default:
+            return MessageId::InvalidRequest;
+    }
+}
 
 namespace magic_enum::customize {
 template <>
@@ -20,8 +37,34 @@ struct enum_range<MessageId> {
 };
 }  // namespace magic_enum::customize
 
+enum class ServerError : uint16_t {
+    Success = 0,
+    InvalidJson = 1001,
+    RPCFailed,
+    VerifyCodeExpired,
+    VerifyCodeErr,
+    UserExist,
+    PasswdError,
+    EmailNotMatch,
+    PasswdUpdateFailed,
+    TokenInvalid,
+    InternalError,
+    UserNotFound,
+    UserUidInvalid,
+};
+
+namespace magic_enum::customize {
+template <>
+struct enum_range<ServerError> {
+    static constexpr int min = 1001;
+    static constexpr int max = 1024;
+};
+}  // namespace magic_enum::customize
+
 // 保存redis的key前缀
+constexpr std::string_view UserLoginServerPrefix = "user_login_server_";
 constexpr std::string_view UserUidInfoPrefix = "user_uid_info_";
 constexpr std::string_view UserNameInfoPrefix = "user_name_info_";
+constexpr std::string_view login_count_key = "login_count";
 
 #endif

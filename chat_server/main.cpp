@@ -11,6 +11,7 @@
 
 #include "chat_server.hpp"
 #include "config.hpp"
+#include "grpc_service.hpp"
 #include "handle_message.hpp"
 #include "redis_client.hpp"
 
@@ -23,10 +24,8 @@ using asio::redirect_error;
 using asio::use_awaitable;
 using asio::ip::tcp;
 
-awaitable<void> listener(const std::string& name, tcp::acceptor acceptor,
+awaitable<void> listener(const std::shared_ptr<ChatServer>& chat_server, tcp::acceptor acceptor,
                          std::shared_ptr<MessageHandler> handler) {
-    ChatServer chat_server(name);
-
     for (;;) {
         std::make_shared<ChatSession>(co_await acceptor.async_accept(use_awaitable), chat_server)
             ->start(handler);
@@ -35,8 +34,13 @@ awaitable<void> listener(const std::string& name, tcp::acceptor acceptor,
 
 int main(int argc, char* argv[]) {
     try {
+        if (argc != 2) {
+            std::cerr << "Usage: " << argv[0] << " <config file>" << std::endl;
+            return -1;
+        }
+
         ChatConfig config;
-        if (config.init("../config/chat_server.json") != 0) {
+        if (config.init(argv[1]) != 0) {
             return -1;
         }
 
@@ -60,9 +64,9 @@ int main(int argc, char* argv[]) {
         pool->async_run(asio::detached);
 
         // redis 不能用多个线程共享的io_context跑！！！
-        asio::io_context main_io_context;
+        std::shared_ptr<asio::io_context> main_io_context = std::make_shared<asio::io_context>();
         auto redis_client = std::make_shared<RedisClient>();
-        boost::asio::co_spawn(main_io_context, redis_client->run(config.redis),
+        boost::asio::co_spawn(*main_io_context, redis_client->run(config.redis),
                               [](std::exception_ptr p) {
                                   if (p)
                                       std::rethrow_exception(p);
@@ -74,20 +78,35 @@ int main(int argc, char* argv[]) {
             return -1;
         }
 
-        co_spawn(main_io_context,
-                 listener(config.server.name,
-                          tcp::acceptor(main_io_context,
+        auto chat_server = std::make_shared<ChatServer>(config.server.name);
+        co_spawn(*main_io_context,
+                 listener(chat_server,
+                          tcp::acceptor(*main_io_context,
                                         boost::asio::ip::tcp::endpoint(
                                             boost::asio::ip::make_address(config.server.host),
                                             config.server.port)),
                           std::move(handler)),
                  detached);
 
-        asio::signal_set signals(io_context, SIGINT, SIGTERM);
+        // grpc server
+        const std::string server_address =
+            config.grpc_server.host + ":" + std::to_string(config.grpc_server.port);
+        grpc::ServerBuilder builder;
+        builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+
+        ChatServiceServer service(main_io_context, chat_server);
+        builder.RegisterService(&service);
+
+        std::shared_ptr<grpc::Server> server(builder.BuildAndStart());
+        std::cout << "Grpc server listening on " << server_address << "\n";
+        std::thread grpc_thread([=]() { server->Wait(); });
+
+        asio::signal_set signals(*main_io_context, SIGINT, SIGTERM);
         signals.async_wait([&](auto, auto) {
             redis_client->conn_->cancel();
+            server->Shutdown();
             io_context.stop();
-            main_io_context.stop();
+            main_io_context->stop();
         });
 
         std::vector<std::thread> threads;
@@ -95,7 +114,10 @@ int main(int argc, char* argv[]) {
             threads.emplace_back([&io_context] { io_context.run(); });
         }
 
-        main_io_context.run();
+        main_io_context->run();
+        if (grpc_thread.joinable()) {
+            grpc_thread.join();
+        }
         for (auto& t : threads) {
             t.join();
         }

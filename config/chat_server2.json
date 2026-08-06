@@ -1,8 +1,8 @@
 {
     "server": {
-        "name": "chat_server1",
+        "name": "chat_server2",
         "host": "127.0.0.1",
-        "port": 18080
+        "port": 18081
     },
     "status_server": {
         "host": "127.0.0.1",
@@ -10,11 +10,11 @@
     },
     "grpc_server": {
         "host": "127.0.0.1",
-        "port": 50051
+        "port": 50052
     },
     "peer_grpc_server": {
         "host": "127.0.0.1",
-        "port": 50052
+        "port": 50051
     },
     "redis": {
         "host": "127.0.0.1",

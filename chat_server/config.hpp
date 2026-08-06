@@ -58,10 +58,13 @@ public:
 
     ChatServerConfig server;
     ServerConfig status_server;
+    ServerConfig grpc_server;
+    ServerConfig peer_grpc_server;
     RedisConfig redis;
     MysqlConfig mysql;
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ChatConfig, server, status_server, redis, mysql)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ChatConfig, server, status_server, grpc_server, peer_grpc_server,
+                                   redis, mysql)
 };
 
 #endif

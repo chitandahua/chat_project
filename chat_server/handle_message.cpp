@@ -26,8 +26,10 @@
 
 #include "chat_server.hpp"
 #include "config.hpp"
+#include "friend_repo.hpp"
 #include "grpc_service.hpp"
 #include "handle_message.hpp"
+#include "message_common.hpp"
 #include "user_repo.hpp"
 
 namespace asio = boost::asio;
@@ -43,6 +45,7 @@ struct MessageData {
     std::shared_ptr<RedisClient>& redis_client;
     mysql::connection_pool& mysql_pool;
     std::shared_ptr<grpc::Channel>& status_grpc_channel;
+    std::shared_ptr<grpc::Channel>& peer_grpc_channel;
 
     UserRepo& user_repo;
 };
@@ -51,16 +54,25 @@ MessageHandler::MessageHandler(std::shared_ptr<RedisClient>& redis_client,
                                std::shared_ptr<mysql::connection_pool>& pool)
     : redis_client_(redis_client), mysql_pool_(pool), user_repositoty_(pool) {}
 
-// TODO 错误信息
-MsgNode error_response(const MsgNode& msg) {
-    MsgNode res(msg.id(), nullptr);
-    return res;
+MsgNode empty_response(const MsgNode& msg) {
+    return MsgNode(msg.id(), nullptr);
 }
 
-MsgNode error_response(int response_id) {
-    // TODO 错误信息
-    MsgNode res(response_id, nullptr);
-    return res;
+MsgNode empty_response(int response_id) {
+    return MsgNode(response_id, nullptr);
+}
+
+MsgNode message_response(int response_id, nlohmann::json&& response = nlohmann::json()) {
+    response["error"] = magic_enum::enum_integer(ServerError::Success);
+    response["message"] = magic_enum::enum_name(ServerError::Success);
+    return MsgNode(response_id, response.dump());
+}
+
+MsgNode error_response(int response_id, ServerError error) {
+    nlohmann::json response;
+    response["error"] = magic_enum::enum_integer(error);
+    response["message"] = magic_enum::enum_name(error);
+    return MsgNode(response_id, response.dump());
 }
 
 // TODO 放到公共库
@@ -204,12 +216,59 @@ awaitable<std::optional<UserInfo>> search_user_by_type(const MessageData& input,
     co_return result;
 }
 
-constexpr std::string_view login_count_key = "login_count";
+// redis记录 用户登录某个chat_server
+asio::awaitable<bool> set_user_login_server(const std::shared_ptr<RedisClient>& redis_client,
+                                            int64_t uid, const std::string& server_name) {
+    auto key = std::string(UserLoginServerPrefix) + std::to_string(uid);
+    boost::redis::request set_req;
+    set_req.push("SET", key, server_name);
+    boost::redis::response<std::string> set_resp;
+    boost::system::error_code ec;
+    co_await redis_client->conn_->async_exec(
+        set_req, set_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec) {
+        std::cerr << "redis set error (transport/adapt): " << ec.message() << std::endl;
+        co_return false;
+    }
+
+    auto result = std::get<0>(set_resp);
+    if (result.has_error()) {
+        std::cerr << "redis set error (server): " << result.error().diagnostic << std::endl;
+        co_return false;
+    }
+    std::cout << "update user " << uid << " login server: " << server_name << "\n";
+    co_return true;
+}
+
+asio::awaitable<std::optional<std::string>> get_user_login_server(
+    std::shared_ptr<RedisClient>& redis_client, int64_t uid) {
+    auto key = std::string(UserLoginServerPrefix) + std::to_string(uid);
+    redis::request get_req;
+    get_req.push("GET", key);
+    redis::response<std::optional<std::string>> get_resp;
+
+    boost::system::error_code ec;
+    co_await redis_client->conn_->async_exec(
+        get_req, get_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec) {
+        std::cerr << "redis get error (transport/adapt): " << ec.message() << std::endl;
+        co_return std::nullopt;
+    }
+
+    auto result = std::get<0>(get_resp);
+    if (result.has_error()) {
+        std::cerr << "redis get error (server): " << result.error().diagnostic << std::endl;
+        co_return std::nullopt;
+    }
+
+    co_return result.value();
+}
+
 asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_client,
                                          ChatSession& session) {
     boost::redis::request set_req;
-    set_req.push("HSET", login_count_key, session.server().name(),
-                 session.server().participant_count());
+    set_req.push("HSET", login_count_key, session.server()->name(),
+                 session.server()->participant_count());
     boost::redis::response<long long> set_resp;
     boost::system::error_code ec;
     co_await redis_client->conn_->async_exec(
@@ -220,8 +279,8 @@ asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_cli
         std::cerr << "redis set error: " << ec.message() << std::endl;
         co_return false;
     }
-    std::cout << "update server login count: " << session.server().name()
-              << " count: " << session.server().participant_count() << "\n";
+    std::cout << "update server login count: " << session.server()->name()
+              << " count: " << session.server()->participant_count() << "\n";
     co_return true;
 }
 
@@ -229,7 +288,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     auto response_id = magic_enum::enum_integer(MessageId::LoginResponse);
     auto request = nlohmann_parse_json<UserLoginRequest>(input.msg.body());
     if (!request) {
-        co_return error_response(response_id);
+        co_return error_response(response_id, ServerError::InvalidJson);
     }
 
     auto uid = request.value().uid;
@@ -238,7 +297,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     auto response = LoginServiceClient::get_login_token(
         input.status_grpc_channel, LoginMsgRequest{uid, request.value().token});
     if (!response || response.value().error() != 0) {
-        co_return error_response(response_id);
+        co_return error_response(response_id, ServerError::RPCFailed);
     }
 
     std::cout << "login response: " << response.value().token() << "\n";
@@ -246,7 +305,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     std::optional<UserInfo> user_info;
     user_info = co_await search_user_by_type<int64_t>(input, uid);
     if (!user_info) {
-        co_return error_response(response_id);
+        co_return error_response(response_id, ServerError::InternalError);
     }
 
     std::cout << "user info: " << user_info.value().name << "\n";
@@ -259,7 +318,8 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     // session更新uid
     std::cout << "update session uid: " << uid << "\n";
     input.session->set_uid(uid);
-    // TODO 为用户设置登录ip server的名字 redis SET uid映射server name
+    // 为用户设置登录ip server的名字 redis SET uid映射server name
+    (void)co_await set_user_login_server(input.redis_client, uid, input.session->server()->name());
 
     UserLoginResponse login_response{uid, response.value().token(), user_info.value().name};
     auto json_response = response_payload(nlohmann::json(login_response));
@@ -274,7 +334,7 @@ awaitable<MsgNode> search_user(const MessageData& input) {
         request = nlohmann::json::parse(input.msg.body());
     } catch (const nlohmann::json::exception& e) {
         std::cerr << "parse json error: " << e.what() << "\n";
-        co_return error_response(response_id);
+        co_return error_response(response_id, ServerError::InvalidJson);
     }
 
     std::optional<UserInfo> response;
@@ -290,7 +350,70 @@ awaitable<MsgNode> search_user(const MessageData& input) {
         response_msg =
             MsgNode(response_id, boost::json::serialize(boost::json::value_from(response.value())));
     }
-    co_return response_msg.value_or(error_response(response_id));
+    co_return response_msg.value_or(error_response(response_id, ServerError::UserNotFound));
+}
+
+class AddFriendRequest {
+public:
+    int64_t uid;
+    int64_t touid;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(AddFriendRequest, uid, touid)
+};
+
+asio::awaitable<MsgNode> add_friend(const MessageData& input) {
+    auto response_id = magic_enum::enum_integer(MessageId::AddFriendResponse);
+    auto request = nlohmann_parse_json<AddFriendRequest>(input.msg.body());
+    if (!request) {
+        co_return error_response(response_id, ServerError::InvalidJson);
+    } else if (  // request.value().uid != input.session->uid() ||
+        request.value().uid == request.value().touid) {
+        // uid必须为当前用户且目标uid不能为自己
+        co_return error_response(response_id, ServerError::UserUidInvalid);
+    }
+    std::cout << "user " << request.value().uid << " add friend " << request.value().touid << "\n";
+    // 更新数据库 记录添加好友请求(TODO 同意/用户上线时判断是否已经添加了 则去除？)
+    (void)co_await FriendApplyRepo(input.mysql_pool)
+        .add_friend_apply(FriendApply{request.value().uid, request.value().touid});
+
+    // redis查询friend是否登录某个chat_server
+    auto target_login_server =
+        co_await get_user_login_server(input.redis_client, request.value().touid);
+    if (!target_login_server) {  // 未登录直接返回
+        co_return error_response(response_id, ServerError::Success);
+    }
+
+    // 获取当前用户信息
+    auto user_info = co_await input.user_repo.get_user_info(request.value().uid);
+    if (!user_info) {
+        co_return error_response(response_id, ServerError::InternalError);
+    }
+
+    // 若登录的是当前chat_server 则直接发送notify消息
+    if (target_login_server.value() == input.session->server()->name()) {
+        std::cout << "send notify to " << target_login_server.value() << "\n";
+        std::shared_ptr<ChatSession> target_session = std::dynamic_pointer_cast<ChatSession>(
+            input.session->server()->get_participant(request.value().touid));
+        if (!target_session) {  // 可能断连接了？
+            std::cout << "session " << request.value().touid << " not found\n";
+            co_return error_response(response_id, ServerError::Success);
+        }
+        // 发送notify消息
+        auto notify_msg = NotifyAddFriendRequest{request.value().uid, user_info.value().name};
+        target_session->deliver(MsgNode(magic_enum::enum_integer(MessageId::NotifyAddFriend),
+                                        nlohmann::json(notify_msg).dump()));
+    } else {
+        // 否则通过grpc将当前用户信息+好友请求信息 发送给该chat_server
+        std::cout << "send grpc notify to " << target_login_server.value() << "\n";
+        auto response = ChatServiceClient::notify_add_friend(
+            input.peer_grpc_channel,
+            GrpcAddFriendRequest{request.value().uid, user_info.value().name,
+                                 request.value().touid});
+        if (!response) {
+            co_return error_response(input.msg.id(), ServerError::RPCFailed);
+        }
+    }
+    co_return message_response(response_id);
 }
 
 void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& diag) {
@@ -311,24 +434,26 @@ asio::awaitable<MsgNode> MessageHandler::handle_message(std::shared_ptr<ChatSess
                                                         const MsgNode& msg) {
     auto message_id = magic_enum::enum_cast<MessageId>(msg.id());
     if (!message_id) {
-        co_return error_response(msg);
+        co_return empty_response(msg);
     }
 
     auto it = handlers_.find(message_id.value());
     if (it == handlers_.end()) {
-        co_return error_response(msg);
+        co_return empty_response(msg);
     }
 
+    auto response_id = magic_enum::enum_integer(get_response_id(message_id.value()));
     try {
         co_return co_await it->second(MessageData{msg, session, redis_client_, *mysql_pool_,
-                                                  status_grpc_channel_, user_repositoty_});
+                                                  status_grpc_channel_, peer_grpc_channel_,
+                                                  user_repositoty_});
     } catch (const mysql::error_with_diagnostics& err) {
         log_mysql_error(err.code(), err.get_diagnostics());
 
-        co_return error_response(msg);
+        co_return error_response(response_id, ServerError::InternalError);
     } catch (const std::exception& err) {
         std::cerr << "Uncaught exception: " << err.what() << std::endl;
-        co_return error_response(msg);
+        co_return error_response(response_id, ServerError::InternalError);
     }
 }
 
@@ -340,6 +465,15 @@ int MessageHandler::init(const ChatConfig& config) {
         grpc::CreateChannel(status_target, grpc::InsecureChannelCredentials()));
     if (!status_grpc_channel_) {
         std::cerr << "Failed to create status gRPC channel. Invalid address or port." << "\n";
+        return -1;
+    }
+    // chat grpc
+    auto peer_target =
+        config.peer_grpc_server.host + ":" + std::to_string(config.peer_grpc_server.port);
+    peer_grpc_channel_ = std::shared_ptr<grpc::Channel>(
+        grpc::CreateChannel(peer_target, grpc::InsecureChannelCredentials()));
+    if (!peer_grpc_channel_) {
+        std::cerr << "Failed to create chat gRPC channel. Invalid address or port." << "\n";
         return -1;
     }
 
@@ -354,4 +488,5 @@ int MessageHandler::init(const ChatConfig& config) {
 void MessageHandler::handlers_init() {
     handlers_.insert({MessageId::LoginRequest, login});
     handlers_.insert({MessageId::SearchUserRequest, search_user});
+    handlers_.insert({MessageId::AddFriendRequest, add_friend});
 }

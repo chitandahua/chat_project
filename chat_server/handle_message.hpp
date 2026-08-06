@@ -42,6 +42,7 @@ private:
     std::shared_ptr<RedisClient> redis_client_;
     std::shared_ptr<mysql::connection_pool> mysql_pool_;
     std::shared_ptr<grpc::Channel> status_grpc_channel_;
+    std::shared_ptr<grpc::Channel> peer_grpc_channel_;
     std::map<MessageId, RequestHandler> handlers_;
     UserRepo user_repositoty_;
 };
