@@ -59,9 +59,10 @@ int main(int argc, char* argv[]) {
                 });
         pool->async_run(asio::detached);
 
-        // redis
+        // redis 不能用多个线程共享的io_context跑！！！
+        asio::io_context main_io_context;
         auto redis_client = std::make_shared<RedisClient>();
-        boost::asio::co_spawn(io_context, redis_client->run(config.redis),
+        boost::asio::co_spawn(main_io_context, redis_client->run(config.redis),
                               [](std::exception_ptr p) {
                                   if (p)
                                       std::rethrow_exception(p);
@@ -73,9 +74,9 @@ int main(int argc, char* argv[]) {
             return -1;
         }
 
-        co_spawn(io_context,
+        co_spawn(main_io_context,
                  listener(config.server.name,
-                          tcp::acceptor(io_context,
+                          tcp::acceptor(main_io_context,
                                         boost::asio::ip::tcp::endpoint(
                                             boost::asio::ip::make_address(config.server.host),
                                             config.server.port)),
@@ -86,6 +87,7 @@ int main(int argc, char* argv[]) {
         signals.async_wait([&](auto, auto) {
             redis_client->conn_->cancel();
             io_context.stop();
+            main_io_context.stop();
         });
 
         std::vector<std::thread> threads;
@@ -93,7 +95,7 @@ int main(int argc, char* argv[]) {
             threads.emplace_back([&io_context] { io_context.run(); });
         }
 
-        io_context.run();
+        main_io_context.run();
         for (auto& t : threads) {
             t.join();
         }
