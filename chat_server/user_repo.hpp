@@ -55,27 +55,6 @@ public:
     UserRepo(std::shared_ptr<mysql::connection_pool>& pool)
         : pool_(pool) {}  // user_infos_(std::make_shared<std::map<int64_t, UserInfo>>())
 
-    auto get_user_info_memory(int64_t uid) const -> std::optional<UserInfo> {
-        std::lock_guard lock(mutex_);
-        auto it = user_infos_.find(uid);
-        if (it == user_infos_.end()) {
-            return std::nullopt;
-        }
-        return it->second;
-    }
-
-    auto set_user_info_memory(int64_t uid, const UserInfo& info) -> bool {
-        std::lock_guard lock(mutex_);
-        auto it = user_infos_.find(uid);
-        if (it == user_infos_.end()) {
-            user_infos_.insert({uid, info});
-            return true;
-        }
-        // TODO 在查数据库时 可能有其他的插入/修改了？
-        // it->second = info;
-        return false;
-    }
-
     auto get_user_info(int64_t uid) const -> boost::asio::awaitable<tl::expected<UserInfo, int>> {
         auto conn = co_await pool_->async_get_connection();
         mysql::static_results<UserInfo> result;
@@ -107,9 +86,5 @@ public:
 
 private:
     std::shared_ptr<mysql::connection_pool> pool_;
-    mutable std::mutex mutex_;
-    // TODO 清除
-    // std::shared_ptr<std::map<int64_t, UserInfo>> user_infos_;
-    std::map<int64_t, UserInfo> user_infos_;
 };
 #endif

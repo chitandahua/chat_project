@@ -40,6 +40,7 @@ public:
         participants_.insert(participant);
     }
 
+    // TODO logout/断链接 更新redis登录数？
     void leave(ChatParticipantPtr participant) {
         std::lock_guard<std::mutex> lock(mutex_);
         participants_.erase(participant);

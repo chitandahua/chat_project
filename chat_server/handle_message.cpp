@@ -105,72 +105,6 @@ nlohmann::json response_payload_empty(int err = 0, const std::string& msg = "") 
     return response_payload(std::nullopt, err, msg);
 }
 
-constexpr std::string_view login_count_key = "login_count";
-asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_client,
-                                         ChatSession& session) {
-    boost::redis::request set_req;
-    set_req.push("HSET", login_count_key, session.server().name(),
-                 session.server().participant_count());
-    boost::redis::response<long long> set_resp;
-    boost::system::error_code ec;
-    co_await redis_client->conn_->async_exec(
-        set_req, set_resp,
-        boost::asio::redirect_error(boost::asio::cancel_after(10s, boost::asio::use_awaitable),
-                                    ec));
-    if (ec) {
-        std::cerr << "redis set error: " << ec.message() << std::endl;
-        co_return false;
-    }
-    std::cout << "update server login count: " << session.server().name()
-              << " count: " << session.server().participant_count() << "\n";
-    co_return true;
-}
-
-asio::awaitable<MsgNode> login(const MessageData& input) {
-    auto response_id = magic_enum::enum_integer(MessageId::LoginResponse);
-    auto request = nlohmann_parse_json<UserLoginRequest>(input.msg.body());
-    if (!request) {
-        co_return error_response(response_id);
-    }
-
-    // 从status grpc获取token
-    auto response = LoginServiceClient::get_login_token(
-        input.status_grpc_channel, LoginMsgRequest{request.value().uid, request.value().token});
-    if (!response || response.value().error() != 0) {
-        co_return error_response(response_id);
-    }
-
-    std::cout << "login response: " << response.value().token() << "\n";
-    // 从内存/数据库中获取UserInfo
-    auto uid = request.value().uid;
-    auto user_info = input.user_repo.get_user_info_memory(uid);
-    if (!user_info) {
-        auto result = co_await input.user_repo.get_user_info(uid);
-        if (!result) {
-            co_return error_response(response_id);
-        }
-        user_info = result.value();
-    }
-
-    std::cout << "user info: " << user_info->name << "\n";
-    // 登录数 更新到redis
-    bool ok = co_await update_login_count(input.redis_client, *input.session);
-    if (!ok) {
-        std::cout << "warning: update login count failed\n";
-    }
-
-    // session更新uid
-    std::cout << "update session uid: " << uid << "\n";
-    input.session->set_uid(uid);
-    // TODO 为用户设置登录ip server的名字 redis SET uid映射server name
-
-    (void)input.user_repo.set_user_info_memory(uid, user_info.value());
-    UserLoginResponse login_response{uid, response.value().token(), user_info.value().name};
-    auto json_response = response_payload(nlohmann::json(login_response));
-    std::cout << "login response: " << json_response.dump() << "\n";
-    co_return MsgNode(response_id, json_response.dump());
-}
-
 // boost::json::serialize(boost::json::value_from(body));
 
 // Attempts to parse a string as a JSON into an object of type T.
@@ -241,7 +175,7 @@ asio::awaitable<void> save_user_info(const MessageData& input, const std::string
 }
 
 template <typename T>
-awaitable<std::optional<MsgNode>> search_user_by_type(const MessageData& input, const T& key) {
+awaitable<std::optional<UserInfo>> search_user_by_type(const MessageData& input, const T& key) {
     std::string user_info_key;
     if constexpr (std::is_same_v<T, int64_t>) {
         user_info_key = std::string(UserUidInfoPrefix) + std::to_string(key);
@@ -262,7 +196,70 @@ awaitable<std::optional<MsgNode>> search_user_by_type(const MessageData& input, 
         // 保存到redis
         co_await save_user_info(input, user_info_key, user_info_str);
     }
-    co_return MsgNode(input.msg.id(), user_info_str);
+    co_return result;
+}
+
+constexpr std::string_view login_count_key = "login_count";
+asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_client,
+                                         ChatSession& session) {
+    boost::redis::request set_req;
+    set_req.push("HSET", login_count_key, session.server().name(),
+                 session.server().participant_count());
+    boost::redis::response<long long> set_resp;
+    boost::system::error_code ec;
+    co_await redis_client->conn_->async_exec(
+        set_req, set_resp,
+        boost::asio::redirect_error(boost::asio::cancel_after(10s, boost::asio::use_awaitable),
+                                    ec));
+    if (ec) {
+        std::cerr << "redis set error: " << ec.message() << std::endl;
+        co_return false;
+    }
+    std::cout << "update server login count: " << session.server().name()
+              << " count: " << session.server().participant_count() << "\n";
+    co_return true;
+}
+
+asio::awaitable<MsgNode> login(const MessageData& input) {
+    auto response_id = magic_enum::enum_integer(MessageId::LoginResponse);
+    auto request = nlohmann_parse_json<UserLoginRequest>(input.msg.body());
+    if (!request) {
+        co_return error_response(response_id);
+    }
+
+    auto uid = request.value().uid;
+    // TODO 改成直接从redis获取
+    // 从status grpc获取token
+    auto response = LoginServiceClient::get_login_token(
+        input.status_grpc_channel, LoginMsgRequest{uid, request.value().token});
+    if (!response || response.value().error() != 0) {
+        co_return error_response(response_id);
+    }
+
+    std::cout << "login response: " << response.value().token() << "\n";
+    // 从redis/数据库中获取UserInfo
+    std::optional<UserInfo> user_info;
+    user_info = co_await search_user_by_type<int64_t>(input, uid);
+    if (!user_info) {
+        co_return error_response(response_id);
+    }
+
+    std::cout << "user info: " << user_info.value().name << "\n";
+    // 登录数 更新到redis
+    bool ok = co_await update_login_count(input.redis_client, *input.session);
+    if (!ok) {
+        std::cout << "warning: update login count failed\n";
+    }
+
+    // session更新uid
+    std::cout << "update session uid: " << uid << "\n";
+    input.session->set_uid(uid);
+    // TODO 为用户设置登录ip server的名字 redis SET uid映射server name
+
+    UserLoginResponse login_response{uid, response.value().token(), user_info.value().name};
+    auto json_response = response_payload(nlohmann::json(login_response));
+    std::cout << "login response: " << json_response.dump() << "\n";
+    co_return MsgNode(response_id, json_response.dump());
 }
 
 awaitable<MsgNode> search_user(const MessageData& input) {
@@ -275,7 +272,7 @@ awaitable<MsgNode> search_user(const MessageData& input) {
         co_return error_response(response_id);
     }
 
-    std::optional<MsgNode> response;
+    std::optional<UserInfo> response;
     if (request.contains("uid") && request["uid"].is_number()) {
         response = co_await search_user_by_type<int64_t>(input, request["uid"].get<int64_t>());
     } else if (request.contains("name") && request["name"].is_string()) {
@@ -283,10 +280,12 @@ awaitable<MsgNode> search_user(const MessageData& input) {
             co_await search_user_by_type<std::string>(input, request["name"].get<std::string>());
     }
 
+    std::optional<MsgNode> response_msg;
     if (response) {
-        response.value().set_id(response_id);
+        response_msg =
+            MsgNode(response_id, boost::json::serialize(boost::json::value_from(response.value())));
     }
-    co_return response.value_or(error_response(response_id));
+    co_return response_msg.value_or(error_response(response_id));
 }
 
 void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& diag) {
