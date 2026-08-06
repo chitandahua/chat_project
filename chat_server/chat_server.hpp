@@ -131,11 +131,6 @@ private:
                 auto read_len = co_await asio::async_read(
                     socket_, boost::asio::buffer(read_msg.data(), MsgNode::PREFIX_LEN),
                     use_awaitable);
-                if (read_len == 0) {
-                    std::cout << "read len is 0, stop\n";
-                    stop();
-                    co_return;
-                }
 
                 if (!read_msg.decode_header()) {
                     stop();
@@ -148,7 +143,19 @@ private:
 
                 deliver(co_await handler->handle_message(shared_from_this(), read_msg));
             }
-        } catch (std::exception&) {
+        } catch (const boost::system::system_error& e) {
+            if (e.code() == asio::error::eof) {
+                std::cout << "Connection closed by peer\n";
+            } else if (e.code() == asio::error::connection_reset) {
+                std::cout << "Connection reset by peer\n";
+            } else if (e.code() == asio::error::operation_aborted) {
+                std::cout << "Operation aborted (likely shutdown)\n";
+            } else {
+                std::cerr << "System error: " << e.what() << "\n";
+            }
+            stop();
+        } catch (const std::exception& e) {
+            std::cerr << "Exception: " << e.what() << "\n";
             stop();
         }
     }
