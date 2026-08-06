@@ -14,6 +14,8 @@
 #include <map>
 #include <memory>
 
+#include "message_common.hpp"
+
 using namespace boost::asio::ip;
 namespace asio = boost::asio;
 
@@ -22,10 +24,6 @@ class MsgNode;
 class MessageData;
 class ChatSession;
 class RedisClient;
-
-enum class MessageId : uint8_t {
-    Login = 0,
-};
 
 using RequestHandler = std::function<asio::awaitable<MsgNode>(const MessageData&)>;
 

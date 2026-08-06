@@ -29,7 +29,7 @@ public:
             encode_header();
         }
     }
-    MsgNode(uint32_t id, std::string&& body) : MsgNode(id, body.c_str()) {}
+    MsgNode(uint32_t id, const std::string& body) : MsgNode(id, body.c_str()) {}
 
     const char* data() const {
         return data_;

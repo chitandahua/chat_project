@@ -6,6 +6,7 @@ find_package(Boost REQUIRED COMPONENTS json)
 find_package(Boost REQUIRED COMPONENTS charconv)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(magic_enum CONFIG REQUIRED)
 
 add_executable(chat_server ${CHAT_SOURCES})
 
@@ -15,4 +16,5 @@ target_link_libraries(chat_server
     message_proto
     common
     Boost::json
-    Boost::charconv Threads::Threads OpenSSL::Crypto OpenSSL::SSL)
+    Boost::charconv Threads::Threads OpenSSL::Crypto OpenSSL::SSL
+    magic_enum::magic_enum)

@@ -1,3 +1,4 @@
+#include <boost/redis/request.hpp>
 #include <boost/url.hpp>
 #include <cstdint>
 #include <memory>
@@ -21,6 +22,8 @@
 
 #include <boost/describe/class.hpp>
 
+#include <magic_enum/magic_enum.hpp>
+
 #include "chat_server.hpp"
 #include "config.hpp"
 #include "grpc_service.hpp"
@@ -29,6 +32,7 @@
 
 namespace asio = boost::asio;
 namespace mysql = boost::mysql;
+namespace redis = boost::redis;
 namespace http = boost::beast::http;
 using namespace std::chrono_literals;
 
@@ -47,9 +51,15 @@ MessageHandler::MessageHandler(std::shared_ptr<RedisClient>& redis_client,
                                std::shared_ptr<mysql::connection_pool>& pool)
     : redis_client_(redis_client), mysql_pool_(pool), user_repositoty_(pool) {}
 
+// TODO 错误信息
 MsgNode error_response(const MsgNode& msg) {
-    // TODO 错误信息
     MsgNode res(msg.id(), nullptr);
+    return res;
+}
+
+MsgNode error_response(int response_id) {
+    // TODO 错误信息
+    MsgNode res(response_id, nullptr);
     return res;
 }
 
@@ -117,16 +127,17 @@ asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_cli
 }
 
 asio::awaitable<MsgNode> login(const MessageData& input) {
+    auto response_id = magic_enum::enum_integer(MessageId::LoginResponse);
     auto request = nlohmann_parse_json<UserLoginRequest>(input.msg.body());
     if (!request) {
-        co_return error_response(input.msg);
+        co_return error_response(response_id);
     }
 
     // 从status grpc获取token
     auto response = LoginServiceClient::get_login_token(
         input.status_grpc_channel, LoginMsgRequest{request.value().uid, request.value().token});
     if (!response || response.value().error() != 0) {
-        co_return error_response(input.msg);
+        co_return error_response(response_id);
     }
 
     std::cout << "login response: " << response.value().token() << "\n";
@@ -136,7 +147,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     if (!user_info) {
         auto result = co_await input.user_repo.get_user_info(uid);
         if (!result) {
-            co_return error_response(input.msg);
+            co_return error_response(response_id);
         }
         user_info = result.value();
     }
@@ -157,7 +168,125 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     UserLoginResponse login_response{uid, response.value().token(), user_info.value().name};
     auto json_response = response_payload(nlohmann::json(login_response));
     std::cout << "login response: " << json_response.dump() << "\n";
-    co_return MsgNode(input.msg.id(), json_response.dump());
+    co_return MsgNode(response_id, json_response.dump());
+}
+
+// boost::json::serialize(boost::json::value_from(body));
+
+// Attempts to parse a string as a JSON into an object of type T.
+// T should be a type with Boost.Describe metadata.
+template <class T>
+boost::system::result<T> parse_json(std::string_view json_string) {
+    boost::system::error_code ec;
+    auto val = boost::json::parse(json_string, ec);
+    if (ec) {
+        return ec;
+    }
+
+    return boost::json::try_value_to<T>(val);
+}
+
+template <typename T>
+asio::awaitable<std::optional<UserInfo>> search_user_info(const MessageData& input,
+                                                          const std::string& user_info_key,
+                                                          const T& key, bool& is_redis_exist) {
+    // 先查redis
+    redis::request get_req;
+    get_req.push("GET", user_info_key);
+    redis::response<std::optional<std::string>> get_resp;
+
+    boost::system::error_code ec;
+    co_await input.redis_client->conn_->async_exec(
+        get_req, get_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec) {
+        std::cerr << "redis get error: " << ec.message() << std::endl;
+        co_return std::nullopt;
+    }
+
+    auto result = std::get<0>(get_resp);
+    if (result.has_error()) {
+        co_return std::nullopt;
+    }
+
+    const std::optional<std::string>& opt_value = result.value();
+    if (opt_value.has_value()) {
+        auto user_info = parse_json<UserInfo>(opt_value.value());
+        if (user_info) {
+            is_redis_exist = true;
+            co_return user_info.value();
+        }
+    }
+
+    std::cout << "redis not exist: " << user_info_key << ", search mysql\n";
+    // 没有则查mysql
+    auto user_info_mysql = co_await input.user_repo.get_user_info(key);
+    if (!user_info_mysql) {
+        co_return std::nullopt;
+    }
+    co_return user_info_mysql.value();
+}
+
+asio::awaitable<void> save_user_info(const MessageData& input, const std::string& key,
+                                     const std::string& user_info_str) {
+    redis::request set_req;
+    set_req.push("SET", key, user_info_str);
+    redis::response<std::string> set_resp;
+    boost::system::error_code ec;
+    co_await input.redis_client->conn_->async_exec(
+        set_req, set_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec) {
+        std::cerr << "redis set error: " << ec.message() << std::endl;
+    }
+    co_return;
+}
+
+template <typename T>
+awaitable<std::optional<MsgNode>> search_user_by_type(const MessageData& input, const T& key) {
+    std::string user_info_key;
+    if constexpr (std::is_same_v<T, int64_t>) {
+        user_info_key = std::string(UserUidInfoPrefix) + std::to_string(key);
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        user_info_key = std::string(UserNameInfoPrefix) + key;
+    } else {
+        static_assert(sizeof(T) == 0, "Unsupported type for search_user_by_type");
+    }
+
+    bool is_redis_exist = false;
+    auto result = co_await search_user_info<T>(input, user_info_key, key, is_redis_exist);
+    if (!result) {
+        co_return std::nullopt;
+    }
+    std::cout << "search user info: " << user_info_key << " " << result.value().name << "\n";
+    auto user_info_str = boost::json::serialize(boost::json::value_from(result.value()));
+    if (!is_redis_exist) {
+        // 保存到redis
+        co_await save_user_info(input, user_info_key, user_info_str);
+    }
+    co_return MsgNode(input.msg.id(), user_info_str);
+}
+
+awaitable<MsgNode> search_user(const MessageData& input) {
+    auto response_id = magic_enum::enum_integer(MessageId::SearchUserResponse);
+    nlohmann::json request;
+    try {
+        request = nlohmann::json::parse(input.msg.body());
+    } catch (const nlohmann::json::exception& e) {
+        std::cerr << "parse json error: " << e.what() << "\n";
+        co_return error_response(response_id);
+    }
+
+    std::optional<MsgNode> response;
+    if (request.contains("uid") && request["uid"].is_number()) {
+        response = co_await search_user_by_type<int64_t>(input, request["uid"].get<int64_t>());
+    } else if (request.contains("name") && request["name"].is_string()) {
+        response =
+            co_await search_user_by_type<std::string>(input, request["name"].get<std::string>());
+    }
+
+    if (response) {
+        response.value().set_id(response_id);
+    }
+    co_return response.value_or(error_response(response_id));
 }
 
 void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& diag) {
@@ -176,8 +305,12 @@ void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& dia
 
 asio::awaitable<MsgNode> MessageHandler::handle_message(std::shared_ptr<ChatSession> session,
                                                         const MsgNode& msg) {
-    // TODO 获取id
-    auto it = handlers_.find(MessageId::Login);
+    auto message_id = magic_enum::enum_cast<MessageId>(msg.id());
+    if (!message_id) {
+        co_return error_response(msg);
+    }
+
+    auto it = handlers_.find(message_id.value());
     if (it == handlers_.end()) {
         co_return error_response(msg);
     }
@@ -215,5 +348,6 @@ int MessageHandler::init(const ChatConfig& config) {
 }
 
 void MessageHandler::handlers_init() {
-    handlers_.insert({MessageId::Login, login});
+    handlers_.insert({MessageId::LoginRequest, login});
+    handlers_.insert({MessageId::SearchUserRequest, search_user});
 }

@@ -90,6 +90,21 @@ public:
         co_return user_info[0];
     }
 
+    auto get_user_info(const std::string& name) const
+        -> boost::asio::awaitable<tl::expected<UserInfo, int>> {
+        auto conn = co_await pool_->async_get_connection();
+        mysql::static_results<UserInfo> result;
+        co_await conn->async_execute(
+            mysql::with_params("SELECT * FROM user WHERE name = {0}", name), result);
+
+        conn.return_without_reset();
+        auto user_info = result.rows<0>();
+        if (user_info.empty()) {
+            co_return tl::make_unexpected(-1);
+        }
+        co_return user_info[0];
+    }
+
 private:
     std::shared_ptr<mysql::connection_pool> pool_;
     mutable std::mutex mutex_;

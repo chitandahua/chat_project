@@ -6,6 +6,7 @@ nlohmann_json/3.12.0
 tomlplusplus/3.4.0
 tl-expected/1.2.0
 #mailio/0.25.3
+magic_enum/0.9.8
 
 [generators]
 CMakeDeps
