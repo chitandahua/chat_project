@@ -41,6 +41,7 @@ public:
             std::cerr << status.error_message() << "\n";
             return tl::make_unexpected(-1);
         }
+        std::cout << "get login token: " << response.token() << "\n";
         return response;
     }
 };

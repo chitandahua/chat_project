@@ -13,5 +13,6 @@ target_link_libraries(chat_server
     PRIVATE
     project_common_deps
     message_proto
+    common
     Boost::json
     Boost::charconv Threads::Threads OpenSSL::Crypto OpenSSL::SSL)

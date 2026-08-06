@@ -12,6 +12,7 @@
 #include "chat_server.hpp"
 #include "config.hpp"
 #include "handle_message.hpp"
+#include "redis_client.hpp"
 
 using namespace boost;
 
@@ -22,8 +23,9 @@ using asio::redirect_error;
 using asio::use_awaitable;
 using asio::ip::tcp;
 
-awaitable<void> listener(tcp::acceptor acceptor, std::shared_ptr<MessageHandler> handler) {
-    chat_room room;
+awaitable<void> listener(const std::string& name, tcp::acceptor acceptor,
+                         std::shared_ptr<MessageHandler> handler) {
+    chat_room room(name);
 
     for (;;) {
         std::make_shared<chat_session>(co_await acceptor.async_accept(use_awaitable), room)
@@ -57,13 +59,23 @@ int main(int argc, char* argv[]) {
                 });
         pool->async_run(asio::detached);
 
-        std::shared_ptr<MessageHandler> handler = std::make_shared<MessageHandler>(pool);
+        // redis
+        auto redis_client = std::make_shared<RedisClient>();
+        boost::asio::co_spawn(io_context, redis_client->run(config.redis),
+                              [](std::exception_ptr p) {
+                                  if (p)
+                                      std::rethrow_exception(p);
+                              });
+
+        std::shared_ptr<MessageHandler> handler =
+            std::make_shared<MessageHandler>(redis_client, pool);
         if (handler->init(config) != 0) {
             return -1;
         }
 
         co_spawn(io_context,
-                 listener(tcp::acceptor(io_context,
+                 listener(config.server.name,
+                          tcp::acceptor(io_context,
                                         boost::asio::ip::tcp::endpoint(
                                             boost::asio::ip::make_address(config.server.host),
                                             config.server.port)),
@@ -71,7 +83,10 @@ int main(int argc, char* argv[]) {
                  detached);
 
         asio::signal_set signals(io_context, SIGINT, SIGTERM);
-        signals.async_wait([&](auto, auto) { io_context.stop(); });
+        signals.async_wait([&](auto, auto) {
+            redis_client->conn_->cancel();
+            io_context.stop();
+        });
 
         std::vector<std::thread> threads;
         for (int i = 0; i < threads_num; ++i) {

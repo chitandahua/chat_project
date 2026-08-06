@@ -20,8 +20,8 @@
 #include <boost/beast/http/status.hpp>
 
 #include <boost/describe/class.hpp>
-#include <boost/redis/src.hpp>
 
+#include "chat_server.hpp"
 #include "config.hpp"
 #include "grpc_service.hpp"
 #include "handle_message.hpp"
@@ -30,18 +30,22 @@
 namespace asio = boost::asio;
 namespace mysql = boost::mysql;
 namespace http = boost::beast::http;
+using namespace std::chrono_literals;
 
 struct MessageData {
     const MsgNode& msg;
 
+    std::shared_ptr<chat_session>& session;
+    std::shared_ptr<RedisClient>& redis_client;
     mysql::connection_pool& mysql_pool;
     std::shared_ptr<grpc::Channel>& status_grpc_channel;
 
     UserRepo& user_repo;
 };
 
-MessageHandler::MessageHandler(std::shared_ptr<mysql::connection_pool>& pool)
-    : mysql_pool_(pool), user_repositoty_(pool) {}
+MessageHandler::MessageHandler(std::shared_ptr<RedisClient>& redis_client,
+                               std::shared_ptr<mysql::connection_pool>& pool)
+    : redis_client_(redis_client), mysql_pool_(pool), user_repositoty_(pool) {}
 
 MsgNode error_response(const MsgNode& msg) {
     // TODO 错误信息
@@ -91,6 +95,26 @@ nlohmann::json response_payload_empty(int err = 0, const std::string& msg = "") 
     return response_payload(std::nullopt, err, msg);
 }
 
+constexpr std::string_view login_count_key = "login_count";
+asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_client,
+                                         chat_session& session) {
+    boost::redis::request set_req;
+    set_req.push("HSET", login_count_key, session.server_name(), session.server_session_count());
+    boost::redis::response<long long> set_resp;
+    boost::system::error_code ec;
+    co_await redis_client->conn_->async_exec(
+        set_req, set_resp,
+        boost::asio::redirect_error(boost::asio::cancel_after(10s, boost::asio::use_awaitable),
+                                    ec));
+    if (ec) {
+        std::cerr << "redis set error: " << ec.message() << std::endl;
+        co_return false;
+    }
+    std::cout << "update server login count: " << session.server_name()
+              << " count: " << session.server_session_count() << "\n";
+    co_return true;
+}
+
 asio::awaitable<MsgNode> login(const MessageData& input) {
     auto request = nlohmann_parse_json<UserLoginRequest>(input.msg.body());
     if (!request) {
@@ -104,6 +128,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
         co_return error_response(input.msg);
     }
 
+    std::cout << "login response: " << response.value().token() << "\n";
     // 从内存/数据库中获取UserInfo
     auto uid = request.value().uid;
     auto user_info = input.user_repo.get_user_info_memory(uid);
@@ -112,12 +137,26 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
         if (!result) {
             co_return error_response(input.msg);
         }
-        (void)input.user_repo.set_user_info_memory(uid, result.value());
-        UserLoginResponse login_response{uid, response.value().token(), result.value().name};
-        auto json_response = response_payload(nlohmann::json(login_response));
-        std::cout << "login response: " << json_response.dump() << "\n";
-        co_return MsgNode(input.msg.id(), json_response.dump());
+        user_info = result.value();
     }
+
+    std::cout << "user info: " << user_info->name << "\n";
+    // 登录数 更新到redis
+    bool ok = co_await update_login_count(input.redis_client, *input.session);
+    if (!ok) {
+        std::cout << "warning: update login count failed\n";
+    }
+
+    // session更新uid
+    std::cout << "update session uid: " << uid << "\n";
+    input.session->set_uid(uid);
+    // TODO 为用户设置登录ip server的名字 redis SET uid映射server name
+
+    (void)input.user_repo.set_user_info_memory(uid, user_info.value());
+    UserLoginResponse login_response{uid, response.value().token(), user_info.value().name};
+    auto json_response = response_payload(nlohmann::json(login_response));
+    std::cout << "login response: " << json_response.dump() << "\n";
+    co_return MsgNode(input.msg.id(), json_response.dump());
 }
 
 void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& diag) {
@@ -134,7 +173,8 @@ void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& dia
     std::cerr << std::endl;
 }
 
-asio::awaitable<MsgNode> MessageHandler::handle_message(const MsgNode& msg) {
+asio::awaitable<MsgNode> MessageHandler::handle_message(std::shared_ptr<chat_session> session,
+                                                        const MsgNode& msg) {
     // TODO 获取id
     auto it = handlers_.find(MessageId::Login);
     if (it == handlers_.end()) {
@@ -142,8 +182,8 @@ asio::awaitable<MsgNode> MessageHandler::handle_message(const MsgNode& msg) {
     }
 
     try {
-        co_return co_await it->second(
-            MessageData{msg, *mysql_pool_, status_grpc_channel_, user_repositoty_});
+        co_return co_await it->second(MessageData{msg, session, redis_client_, *mysql_pool_,
+                                                  status_grpc_channel_, user_repositoty_});
     } catch (const mysql::error_with_diagnostics& err) {
         log_mysql_error(err.code(), err.get_diagnostics());
 

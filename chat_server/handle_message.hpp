@@ -20,6 +20,8 @@ namespace asio = boost::asio;
 class ChatConfig;
 class MsgNode;
 class MessageData;
+class chat_session;
+class RedisClient;
 
 enum class MessageId : uint8_t {
     Login = 0,
@@ -29,14 +31,17 @@ using RequestHandler = std::function<asio::awaitable<MsgNode>(const MessageData&
 
 class MessageHandler {
 public:
-    explicit MessageHandler(std::shared_ptr<mysql::connection_pool>& pool);
+    MessageHandler(std::shared_ptr<RedisClient>& redis_client,
+                   std::shared_ptr<mysql::connection_pool>& pool);
 
     int init(const ChatConfig& config);
-    asio::awaitable<MsgNode> handle_message(const MsgNode& msg);
+    asio::awaitable<MsgNode> handle_message(std::shared_ptr<chat_session> session,
+                                            const MsgNode& msg);
 
 private:
     void handlers_init();
 
+    std::shared_ptr<RedisClient> redis_client_;
     std::shared_ptr<mysql::connection_pool> mysql_pool_;
     std::shared_ptr<grpc::Channel> status_grpc_channel_;
     std::map<MessageId, RequestHandler> handlers_;

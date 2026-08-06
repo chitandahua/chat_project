@@ -33,6 +33,8 @@ typedef std::shared_ptr<chat_participant> chat_participant_ptr;
 
 class chat_room {
 public:
+    explicit chat_room(const std::string& server_name) : server_name_(server_name) {}
+
     void join(chat_participant_ptr participant) {
         std::lock_guard<std::mutex> lock(mutex_);
         participants_.insert(participant);
@@ -43,8 +45,15 @@ public:
         participants_.erase(participant);
     }
 
+    uint32_t participant_count() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return participants_.size();
+    }
+
+    std::string server_name_;
+
 private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::set<chat_participant_ptr> participants_;
 };
 
@@ -76,13 +85,31 @@ public:
         }
     }
 
+    void set_uid(int64_t uid) {
+        uid_ = uid;
+    }
+
+    uint32_t server_session_count() {
+        return room_.participant_count();
+    }
+
+    std::string server_name() {
+        return room_.server_name_;
+    }
+
 private:
     awaitable<void> reader(const std::shared_ptr<MessageHandler>& handler) {
         try {
             for (MsgNode read_msg;;) {
-                co_await asio::async_read(socket_,
-                                          boost::asio::buffer(read_msg.data(), MsgNode::PREFIX_LEN),
-                                          use_awaitable);
+                auto read_len = co_await asio::async_read(
+                    socket_, boost::asio::buffer(read_msg.data(), MsgNode::PREFIX_LEN),
+                    use_awaitable);
+                if (read_len == 0) {
+                    std::cout << "read len is 0, stop\n";
+                    stop();
+                    co_return;
+                }
+
                 if (!read_msg.decode_header()) {
                     stop();
                     co_return;
@@ -92,7 +119,7 @@ private:
                     socket_, boost::asio::buffer(read_msg.body(), read_msg.body_length()),
                     use_awaitable);
 
-                deliver(co_await handler->handle_message(read_msg));
+                deliver(co_await handler->handle_message(shared_from_this(), read_msg));
             }
         } catch (std::exception&) {
             stop();
@@ -121,6 +148,7 @@ private:
     asio::experimental::concurrent_channel<void(boost::system::error_code,
                                                 std::shared_ptr<MsgNode>)>
         channel_;
+    int64_t uid_;
 };
 
 #endif

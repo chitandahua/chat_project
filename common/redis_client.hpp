@@ -4,7 +4,6 @@
 #include <memory>
 
 #include <boost/redis/connection.hpp>
-#include <boost/redis/src.hpp>
 
 #include "nlohmann/json.hpp"
 

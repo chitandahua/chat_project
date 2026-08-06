@@ -1,11 +1,18 @@
 {
     "server": {
+        "name": "chat_server1",
         "host": "127.0.0.1",
         "port": 18080
     },
     "status_server": {
         "host": "127.0.0.1",
         "port": 10088
+    },
+    "redis": {
+        "host": "127.0.0.1",
+        "port": 6379,
+        "user": "",
+        "pass": ""
     },
     "mysql": {
         "host": "127.0.0.1",

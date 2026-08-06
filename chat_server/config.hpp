@@ -6,6 +6,7 @@
 #include <string>
 
 #include "nlohmann/json.hpp"
+#include "redis_client.hpp"
 
 class ServerConfig {
 public:
@@ -13,6 +14,15 @@ public:
     int port;
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(ServerConfig, host, port)
+};
+
+class ChatServerConfig {
+public:
+    std::string name;
+    std::string host;
+    int port;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ChatServerConfig, name, host, port)
 };
 
 class MysqlConfig {
@@ -46,11 +56,12 @@ public:
         return 0;
     }
 
-    ServerConfig server;
+    ChatServerConfig server;
     ServerConfig status_server;
+    RedisConfig redis;
     MysqlConfig mysql;
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ChatConfig, server, status_server, mysql)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ChatConfig, server, status_server, redis, mysql)
 };
 
 #endif
