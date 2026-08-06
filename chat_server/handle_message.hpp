@@ -20,7 +20,7 @@ namespace asio = boost::asio;
 class ChatConfig;
 class MsgNode;
 class MessageData;
-class chat_session;
+class ChatSession;
 class RedisClient;
 
 enum class MessageId : uint8_t {
@@ -35,7 +35,7 @@ public:
                    std::shared_ptr<mysql::connection_pool>& pool);
 
     int init(const ChatConfig& config);
-    asio::awaitable<MsgNode> handle_message(std::shared_ptr<chat_session> session,
+    asio::awaitable<MsgNode> handle_message(std::shared_ptr<ChatSession> session,
                                             const MsgNode& msg);
 
 private:

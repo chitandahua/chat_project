@@ -23,24 +23,24 @@ using asio::redirect_error;
 using asio::use_awaitable;
 using asio::ip::tcp;
 
-class chat_participant {
+class ChatParticipant {
 public:
-    virtual ~chat_participant() {}
+    virtual ~ChatParticipant() {}
     virtual void deliver(const MsgNode& msg) = 0;
 };
 
-typedef std::shared_ptr<chat_participant> chat_participant_ptr;
+typedef std::shared_ptr<ChatParticipant> ChatParticipantPtr;
 
-class chat_room {
+class ChatServer {
 public:
-    explicit chat_room(const std::string& server_name) : server_name_(server_name) {}
+    explicit ChatServer(const std::string& server_name) : server_name_(server_name) {}
 
-    void join(chat_participant_ptr participant) {
+    void join(ChatParticipantPtr participant) {
         std::lock_guard<std::mutex> lock(mutex_);
         participants_.insert(participant);
     }
 
-    void leave(chat_participant_ptr participant) {
+    void leave(ChatParticipantPtr participant) {
         std::lock_guard<std::mutex> lock(mutex_);
         participants_.erase(participant);
     }
@@ -50,20 +50,23 @@ public:
         return participants_.size();
     }
 
-    std::string server_name_;
+    const std::string& name() const {
+        return server_name_;
+    }
 
 private:
+    std::string server_name_;
     mutable std::mutex mutex_;
-    std::set<chat_participant_ptr> participants_;
+    std::set<ChatParticipantPtr> participants_;
 };
 
-class chat_session : public chat_participant, public std::enable_shared_from_this<chat_session> {
+class ChatSession : public ChatParticipant, public std::enable_shared_from_this<ChatSession> {
 public:
-    chat_session(tcp::socket socket, chat_room& room)
-        : socket_(std::move(socket)), room_(room), channel_(socket_.get_executor(), 64) {}
+    ChatSession(tcp::socket socket, ChatServer& server)
+        : socket_(std::move(socket)), server_(server), channel_(socket_.get_executor(), 64) {}
 
     void start(std::shared_ptr<MessageHandler>& handler) {
-        room_.join(shared_from_this());
+        server_.join(shared_from_this());
 
         co_spawn(
             socket_.get_executor(),
@@ -89,12 +92,8 @@ public:
         uid_ = uid;
     }
 
-    uint32_t server_session_count() {
-        return room_.participant_count();
-    }
-
-    std::string server_name() {
-        return room_.server_name_;
+    ChatServer& server() {
+        return server_;
     }
 
 private:
@@ -139,12 +138,12 @@ private:
     }
 
     void stop() {
-        room_.leave(shared_from_this());
+        server_.leave(shared_from_this());
         socket_.close();
     }
 
     tcp::socket socket_;
-    chat_room& room_;
+    ChatServer& server_;
     asio::experimental::concurrent_channel<void(boost::system::error_code,
                                                 std::shared_ptr<MsgNode>)>
         channel_;

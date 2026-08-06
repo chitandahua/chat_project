@@ -35,7 +35,7 @@ using namespace std::chrono_literals;
 struct MessageData {
     const MsgNode& msg;
 
-    std::shared_ptr<chat_session>& session;
+    std::shared_ptr<ChatSession>& session;
     std::shared_ptr<RedisClient>& redis_client;
     mysql::connection_pool& mysql_pool;
     std::shared_ptr<grpc::Channel>& status_grpc_channel;
@@ -97,9 +97,10 @@ nlohmann::json response_payload_empty(int err = 0, const std::string& msg = "") 
 
 constexpr std::string_view login_count_key = "login_count";
 asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_client,
-                                         chat_session& session) {
+                                         ChatSession& session) {
     boost::redis::request set_req;
-    set_req.push("HSET", login_count_key, session.server_name(), session.server_session_count());
+    set_req.push("HSET", login_count_key, session.server().name(),
+                 session.server().participant_count());
     boost::redis::response<long long> set_resp;
     boost::system::error_code ec;
     co_await redis_client->conn_->async_exec(
@@ -110,8 +111,8 @@ asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_cli
         std::cerr << "redis set error: " << ec.message() << std::endl;
         co_return false;
     }
-    std::cout << "update server login count: " << session.server_name()
-              << " count: " << session.server_session_count() << "\n";
+    std::cout << "update server login count: " << session.server().name()
+              << " count: " << session.server().participant_count() << "\n";
     co_return true;
 }
 
@@ -173,7 +174,7 @@ void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& dia
     std::cerr << std::endl;
 }
 
-asio::awaitable<MsgNode> MessageHandler::handle_message(std::shared_ptr<chat_session> session,
+asio::awaitable<MsgNode> MessageHandler::handle_message(std::shared_ptr<ChatSession> session,
                                                         const MsgNode& msg) {
     // TODO 获取id
     auto it = handlers_.find(MessageId::Login);

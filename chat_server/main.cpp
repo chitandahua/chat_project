@@ -25,10 +25,10 @@ using asio::ip::tcp;
 
 awaitable<void> listener(const std::string& name, tcp::acceptor acceptor,
                          std::shared_ptr<MessageHandler> handler) {
-    chat_room room(name);
+    ChatServer chat_server(name);
 
     for (;;) {
-        std::make_shared<chat_session>(co_await acceptor.async_accept(use_awaitable), room)
+        std::make_shared<ChatSession>(co_await acceptor.async_accept(use_awaitable), chat_server)
             ->start(handler);
     }
 }
