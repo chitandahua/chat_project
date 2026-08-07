@@ -29,7 +29,7 @@ struct FriendApplyRow {
 BOOST_DESCRIBE_STRUCT(FriendApplyRow, (), (status, name))
 
 struct FriendRow {
-    std::string back;
+    std::optional<std::string> back;
     std::string name;
 };
 BOOST_DESCRIBE_STRUCT(FriendRow, (), (back, name))
@@ -68,7 +68,8 @@ public:
     std::string back;
     UserDetail user_detail;
 
-    explicit FriendInfo(const FriendRow& row) : back(row.back), user_detail(row.name) {}
+    explicit FriendInfo(const FriendRow& row)
+        : back(row.back.value_or("")), user_detail(row.name) {}
 
     friend void to_json(nlohmann::json& j, const FriendInfo& info) {
         j = info.user_detail;
