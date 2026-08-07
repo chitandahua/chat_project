@@ -9,6 +9,8 @@
 
 #include <string>
 
+#include <boost/endian/conversion.hpp>
+
 // 线上格式(依次紧挨着,不含任何 padding):
 //   [id: ID_LEN 字节][body_length: HEAD_LEN 字节][body: 变长,最长 MAX_LENGTH]
 class MsgNode {
@@ -20,9 +22,8 @@ public:
 
     MsgNode() = default;
     MsgNode(uint32_t id, const char* body) : id_(id) {
-        // TODO 检查body_length
         if (body) {
-            set_body_length(strlen(body));
+            set_body_length(static_cast<int>(strlen(body)));
             encode_header();
             memcpy(data_ + PREFIX_LEN, body, body_length_);
         } else {
@@ -78,17 +79,24 @@ public:
 
     // 从 data_ 开头解析 id 和 body_length(要求调用前,data_ 前 PREFIX_LEN 字节已经填好)
     bool decode_header() {
-        std::memcpy(&id_, data_, ID_LEN);
-        uint16_t len = 0;
-        std::memcpy(&len, data_ + ID_LEN, HEAD_LEN);
-        // len = ntohs(len);
-        return set_body_length(len);
+        uint32_t net_id = 0;
+        std::memcpy(&net_id, data_, ID_LEN);
+        id_ = boost::endian::big_to_native(net_id);
+
+        uint16_t net_len = 0;
+        std::memcpy(&net_len, data_ + ID_LEN, HEAD_LEN);
+        uint16_t len = boost::endian::big_to_native(net_len);
+
+        return set_body_length(static_cast<int>(len));
     }
 
     // 把 id_/body_length_ 写进 data_ 开头(调用前先 set_id()/set_body_length() 设置好这两个字段)
     void encode_header() {
-        std::memcpy(data_, &id_, ID_LEN);
-        std::memcpy(data_ + ID_LEN, &body_length_, HEAD_LEN);
+        uint32_t net_id = boost::endian::native_to_big(id_);
+        std::memcpy(data_, &net_id, ID_LEN);
+
+        uint16_t net_len = boost::endian::native_to_big(static_cast<uint16_t>(body_length_));
+        std::memcpy(data_ + ID_LEN, &net_len, HEAD_LEN);
     }
 
 private:

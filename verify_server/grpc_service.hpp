@@ -25,42 +25,20 @@ public:
 
         boost::system::error_code ec;
         // GET
-        request get_req;
-        get_req.push("GET", key);
-        response<std::optional<std::string>> get_resp;
-
-        co_await redis_client_->conn_->async_exec(
-            get_req, get_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-        // auto result = co_await redis_client_->conn_->async_try_get<std::string>(
-        //     key, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-        if (ec) {
-            std::cerr << "redis try get error: " << ec.message() << std::endl;
-            co_return tl::make_unexpected(-1);
-        } else if (auto result = std::get<0>(get_resp).value()) {
-            if (result) {
-                std::cout << "get key: " << key << " value: " << result.value() << "\n";
-                co_return result.value();
-            } else {
-                co_return tl::make_unexpected(-1);
-            }
+        auto get_result = co_await redis_client_->get(key);
+        if (get_result) {
+            std::cout << "get key: " << key << " value: " << get_result.value() << "\n";
+            co_return get_result.value();
         }
+        // 查不到/失败 直接创建
+        // else {
+        //    co_return tl::make_unexpected(-1);
+        //}
 
         auto code = boost::uuids::to_string(boost::uuids::random_generator()());
         std::cout << "set key: " << key << " value: " << code << "\n";
         // SET
-        request set_req;
-        set_req.push("SETEX", key, "600", code);
-        response<std::string> set_resp;
-        co_await redis_client_->conn_->async_exec(
-            set_req, set_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-        if (ec) {
-            std::cerr << "redis set error (transport/adapt): " << ec.message() << std::endl;
-            co_return tl::make_unexpected(-1);
-        }
-
-        auto result = std::get<0>(set_resp);
-        if (result.has_error()) {
-            std::cerr << "redis set error (server): " << result.error().diagnostic << std::endl;
+        if (!co_await redis_client_->set_expired(key, code, 600)) {
             co_return tl::make_unexpected(-1);
         }
         co_return code;

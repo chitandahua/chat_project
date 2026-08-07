@@ -18,4 +18,4 @@ target_include_directories(common
 # )
 
 # 如果有外部依赖，也在这里声明
-# target_link_libraries(common PUBLIC some_lib)
+target_link_libraries(common PUBLIC nlohmann_json::nlohmann_json)

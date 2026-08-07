@@ -105,28 +105,17 @@ private:
 
         // 默认选第一个
         int default_index = 0;
-
-        request get_req;
-        get_req.push("HGETALL", "login_count");
-        response<std::map<std::string, long long>> get_resp;
-        boost::system::error_code ec;
-        co_await redis_client_->conn_->async_exec(
-            get_req, get_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-        if (ec) {
-            std::cerr << "redis get error: " << ec.message() << std::endl;
-            co_return default_index;
-        }
-        auto result = std::get<0>(get_resp);
-        if (!result) {
+        auto result = co_await redis_client_->hgetall<std::string, int64_t>("login_count");
+        if (result.empty()) {
             co_return default_index;
         }
         // 有可能server没更新login_count 初始化每个server的login_count为0
-        std::map<std::string, std::pair<size_t, long long>> server_login_count;
+        std::map<std::string, std::pair<size_t, int64_t>> server_login_count;
         for (size_t i = 0; i < chat_servers_.size(); ++i) {
             auto& config = chat_servers_[i];
             server_login_count[config.name] = {i, 0};
         }
-        for (auto& [key, value] : result.value()) {
+        for (auto& [key, value] : result) {
             // 不存在的server 则跳过
             if (auto it = server_login_count.find(key); it != server_login_count.end()) {
                 it->second.second = value;
@@ -135,7 +124,7 @@ private:
 
         // 找出map中 login_count 最小的一个
         int index = default_index;
-        long long min_value = std::numeric_limits<long long>::max();
+        int64_t min_value = std::numeric_limits<int64_t>::max();
         for (auto& [key, value] : server_login_count) {
             std::cout << "server: " << key << " login_count: " << value.second << "\n";
             if (value.second < min_value) {

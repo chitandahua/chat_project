@@ -62,9 +62,9 @@ struct enum_range<ServerError> {
 }  // namespace magic_enum::customize
 
 // 保存redis的key前缀
-constexpr std::string_view UserLoginServerPrefix = "user_login_server_";
-constexpr std::string_view UserUidInfoPrefix = "user_uid_info_";
-constexpr std::string_view UserNameInfoPrefix = "user_name_info_";
-constexpr std::string_view login_count_key = "login_count";
+static const char* UserLoginServerPrefix = "user_login_server_";
+static const char* UserUidInfoPrefix = "user_uid_info_";
+static const char* UserNameInfoPrefix = "user_name_info_";
+static const char* LoginCountKey = "login_count";
 
 #endif

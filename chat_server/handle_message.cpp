@@ -137,24 +137,7 @@ asio::awaitable<std::optional<UserInfo>> search_user_info(const MessageData& inp
                                                           const std::string& user_info_key,
                                                           const T& key, bool& is_redis_exist) {
     // 先查redis
-    redis::request get_req;
-    get_req.push("GET", user_info_key);
-    redis::response<std::optional<std::string>> get_resp;
-
-    boost::system::error_code ec;
-    co_await input.redis_client->conn_->async_exec(
-        get_req, get_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-    if (ec) {
-        std::cerr << "redis get error: " << ec.message() << std::endl;
-        co_return std::nullopt;
-    }
-
-    auto result = std::get<0>(get_resp);
-    if (result.has_error()) {
-        co_return std::nullopt;
-    }
-
-    const std::optional<std::string>& opt_value = result.value();
+    std::optional<std::string> opt_value = co_await input.redis_client->get(user_info_key);
     if (opt_value.has_value()) {
         auto user_info = parse_json<UserInfo>(opt_value.value());
         if (user_info) {
@@ -174,20 +157,7 @@ asio::awaitable<std::optional<UserInfo>> search_user_info(const MessageData& inp
 
 asio::awaitable<void> save_user_info(const MessageData& input, const std::string& key,
                                      const std::string& user_info_str) {
-    redis::request set_req;
-    set_req.push("SET", key, user_info_str);
-    redis::response<std::string> set_resp;
-    boost::system::error_code ec;
-    co_await input.redis_client->conn_->async_exec(
-        set_req, set_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-    if (ec) {
-        std::cerr << "redis set error (transport/adapt): " << ec.message() << std::endl;
-    }
-
-    auto result = std::get<0>(set_resp);
-    if (result.has_error()) {
-        std::cerr << "redis set error (server): " << result.error().diagnostic << std::endl;
-    }
+    (void)co_await input.redis_client->set(key, user_info_str);
     co_return;
 }
 
@@ -220,65 +190,24 @@ awaitable<std::optional<UserInfo>> search_user_by_type(const MessageData& input,
 asio::awaitable<bool> set_user_login_server(const std::shared_ptr<RedisClient>& redis_client,
                                             int64_t uid, const std::string& server_name) {
     auto key = std::string(UserLoginServerPrefix) + std::to_string(uid);
-    boost::redis::request set_req;
-    set_req.push("SET", key, server_name);
-    boost::redis::response<std::string> set_resp;
-    boost::system::error_code ec;
-    co_await redis_client->conn_->async_exec(
-        set_req, set_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-    if (ec) {
-        std::cerr << "redis set error (transport/adapt): " << ec.message() << std::endl;
-        co_return false;
-    }
-
-    auto result = std::get<0>(set_resp);
-    if (result.has_error()) {
-        std::cerr << "redis set error (server): " << result.error().diagnostic << std::endl;
-        co_return false;
-    }
-    std::cout << "update user " << uid << " login server: " << server_name << "\n";
-    co_return true;
+    co_return co_await redis_client->set(key, server_name);
 }
 
 asio::awaitable<std::optional<std::string>> get_user_login_server(
     std::shared_ptr<RedisClient>& redis_client, int64_t uid) {
     auto key = std::string(UserLoginServerPrefix) + std::to_string(uid);
-    redis::request get_req;
-    get_req.push("GET", key);
-    redis::response<std::optional<std::string>> get_resp;
-
-    boost::system::error_code ec;
-    co_await redis_client->conn_->async_exec(
-        get_req, get_resp, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-    if (ec) {
-        std::cerr << "redis get error (transport/adapt): " << ec.message() << std::endl;
-        co_return std::nullopt;
-    }
-
-    auto result = std::get<0>(get_resp);
-    if (result.has_error()) {
-        std::cerr << "redis get error (server): " << result.error().diagnostic << std::endl;
-        co_return std::nullopt;
-    }
-
-    co_return result.value();
+    co_return co_await redis_client->get(key);
 }
 
 asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_client,
                                          ChatSession& session) {
-    boost::redis::request set_req;
-    set_req.push("HSET", login_count_key, session.server()->name(),
-                 session.server()->participant_count());
-    boost::redis::response<long long> set_resp;
-    boost::system::error_code ec;
-    co_await redis_client->conn_->async_exec(
-        set_req, set_resp,
-        boost::asio::redirect_error(boost::asio::cancel_after(10s, boost::asio::use_awaitable),
-                                    ec));
-    if (ec) {
-        std::cerr << "redis set error: " << ec.message() << std::endl;
+    auto result = co_await redis_client->hset<std::string, int64_t>(
+        LoginCountKey, std::map<std::string, int64_t>{
+                           {session.server()->name(), session.server()->participant_count()}});
+    if (result < 0) {
         co_return false;
     }
+
     std::cout << "update server login count: " << session.server()->name()
               << " count: " << session.server()->participant_count() << "\n";
     co_return true;
@@ -366,7 +295,8 @@ asio::awaitable<MsgNode> add_friend(const MessageData& input) {
     auto request = nlohmann_parse_json<AddFriendRequest>(input.msg.body());
     if (!request) {
         co_return error_response(response_id, ServerError::InvalidJson);
-    } else if (  // request.value().uid != input.session->uid() ||
+    } else if (  // TODO 解注释 当前注释掉只是为了方便测试
+                 // request.value().uid != input.session->uid() ||
         request.value().uid == request.value().touid) {
         // uid必须为当前用户且目标uid不能为自己
         co_return error_response(response_id, ServerError::UserUidInvalid);
