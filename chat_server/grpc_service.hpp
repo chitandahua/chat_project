@@ -101,6 +101,48 @@ public:
         : error(response.error()), from_uid(response.fromuid()), to_uid(response.touid()) {}
 };
 
+class TextChatData {
+public:
+    int64_t msgid;
+    std::string content;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(TextChatData, msgid, content)
+};
+
+class GrpcTextChatMsgRequest {
+public:
+    int64_t from_uid;
+    int64_t to_uid;
+    std::vector<TextChatData> text_array;
+
+    explicit operator message::TextChatMsgReq() const {
+        message::TextChatMsgReq request;
+        request.set_fromuid(from_uid);
+        request.set_touid(to_uid);
+        for (const auto& text : text_array) {
+            auto* msg = request.add_textmsgs();
+            msg->set_msg_id(text.msgid);
+            msg->set_msgcontent(text.content);
+        }
+        return request;
+    }
+};
+
+class GrpcTextChatMsgResponse {
+public:
+    int64_t error;
+    int64_t from_uid;
+    int64_t to_uid;
+    std::vector<TextChatData> text_array;
+
+    explicit GrpcTextChatMsgResponse(const message::TextChatMsgRsp& response)
+        : error(response.error()), from_uid(response.fromuid()), to_uid(response.touid()) {
+        for (const auto& msg : response.textmsgs()) {
+            text_array.emplace_back(TextChatData{msg.msg_id(), msg.msgcontent()});
+        }
+    }
+};
+
 class ChatServiceClient {
 public:
     static tl::expected<GrpcAddFriendResponse, ServerError> notify_add_friend(
@@ -132,8 +174,24 @@ public:
         }
         return GrpcAuthFriendResponse(response);
     }
+
+    static tl::expected<GrpcTextChatMsgResponse, ServerError> notify_text_chat_msg(
+        const std::shared_ptr<grpc::Channel>& channel, GrpcTextChatMsgRequest&& req) {
+        message::TextChatMsgReq request = static_cast<message::TextChatMsgReq>(req);
+        grpc::ClientContext context;
+        message::TextChatMsgRsp response;
+
+        grpc::Status status =
+            message::ChatService::NewStub(channel)->NotifyTextChatMsg(&context, request, &response);
+        if (!status.ok()) {
+            std::cerr << status.error_message() << "\n";
+            return tl::make_unexpected(ServerError::RPCFailed);
+        }
+        return GrpcTextChatMsgResponse(response);
+    }
 };
 
+// 用于chat session通信
 class NotifyAddFriendMsg {
 public:
     int64_t applyuid;  // 请求方uid
@@ -148,6 +206,23 @@ public:
     int64_t touid;    // 申请方uid
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(NotifyAuthFriendMsg, fromuid, touid)
+};
+
+class NotifyTextChatMessage {
+public:
+    int64_t fromuid = 0;
+    int64_t touid = 0;
+    std::vector<TextChatData> text_array;
+
+    NotifyTextChatMessage() = default;
+    explicit NotifyTextChatMessage(const message::TextChatMsgReq& request)
+        : fromuid(request.fromuid()), touid(request.touid()) {
+        for (const auto& msg : request.textmsgs()) {
+            text_array.emplace_back(TextChatData{msg.msg_id(), msg.msgcontent()});
+        }
+    }
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(NotifyTextChatMessage, fromuid, touid, text_array)
 };
 
 class ChatServiceServer final : public message::ChatService::CallbackService {
@@ -211,6 +286,36 @@ public:
                 response->set_error(0);
                 response->set_fromuid(request->fromuid());
                 response->set_touid(request->touid());
+
+                reactor->Finish(grpc::Status::OK);
+                co_return;
+            },
+            boost::asio::detached);
+
+        return reactor;
+    }
+
+    grpc::ServerUnaryReactor* NotifyTextChatMsg(grpc::CallbackServerContext* context,
+                                                const message::TextChatMsgReq* request,
+                                                message::TextChatMsgRsp* response) override {
+        auto* reactor = context->DefaultReactor();
+
+        boost::asio::co_spawn(
+            *ioc_,
+            [this, request, response, reactor]() -> boost::asio::awaitable<void> {
+                std::shared_ptr<ChatSession> target_session =
+                    std::dynamic_pointer_cast<ChatSession>(
+                        chat_server_->get_participant(request->touid()));
+                if (target_session) {
+                    auto notify_msg = NotifyTextChatMessage(*request);
+                    target_session->deliver(
+                        MsgNode(magic_enum::enum_integer(MessageId::NotifyTextChatMsg),
+                                nlohmann::json(notify_msg).dump()));
+                } else {
+                    std::cout << "target session not found\n";
+                }
+
+                response->set_error(0);
 
                 reactor->Finish(grpc::Status::OK);
                 co_return;

@@ -13,9 +13,12 @@ enum class MessageId : uint16_t {
     AddFriendRequest = 1009,
     AddFriendResponse = 1010,
     NotifyAddFriend = 1011,
-    AuthFriendRequest = 1012,
-    AuthFriendResponse = 1013,
-    NotifyAuthFriend = 1014,
+    AuthFriendRequest = 1013,
+    AuthFriendResponse = 1014,
+    NotifyAuthFriend = 1015,
+    TextChatMsgReq = 1017,
+    TextChatMsgRsp = 1018,
+    NotifyTextChatMsg = 1019,
     InvalidRequest = 1500,
 };
 
