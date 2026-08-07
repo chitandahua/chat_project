@@ -194,16 +194,25 @@ public:
 // 用于chat session通信
 class NotifyAddFriendMsg {
 public:
-    int64_t applyuid;  // 请求方uid
-    std::string name;  // 请求方名字
+    int64_t applyuid = 0;  // 请求方uid
+    std::string name;      // 请求方名字
+
+    NotifyAddFriendMsg() = default;
+    explicit NotifyAddFriendMsg(const message::AddFriendReq& request)
+        : applyuid(request.applyuid()), name(request.name()) {}
+    NotifyAddFriendMsg(int64_t uid, const std::string& username) : applyuid(uid), name(username) {}
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(NotifyAddFriendMsg, applyuid, name)
 };
 
 class NotifyAuthFriendMsg {
 public:
-    int64_t fromuid;  // 认证方uid
-    int64_t touid;    // 申请方uid
+    int64_t fromuid = 0;  // 认证方uid
+    int64_t touid = 0;    // 申请方uid
+
+    NotifyAuthFriendMsg() = default;
+    explicit NotifyAuthFriendMsg(const message::AuthFriendReq& request)
+        : fromuid(request.fromuid()), touid(request.touid()) {}
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(NotifyAuthFriendMsg, fromuid, touid)
 };
@@ -226,6 +235,19 @@ public:
 };
 
 class ChatServiceServer final : public message::ChatService::CallbackService {
+    template <typename T, typename V>
+    void notify_session(const T* request, int64_t uid, MessageId id) {
+        std::shared_ptr<ChatSession> target_session =
+            std::dynamic_pointer_cast<ChatSession>(chat_server_->get_participant(uid));
+        if (target_session) {
+            auto notify_msg = V(*request);
+            target_session->deliver(
+                MsgNode(magic_enum::enum_integer(id), nlohmann::json(notify_msg).dump()));
+        } else {
+            std::cout << "target session not found\n";
+        }
+    }
+
 public:
     ChatServiceServer(std::shared_ptr<boost::asio::io_context>& ioc,
                       std::shared_ptr<ChatServer>& chat_server)
@@ -239,17 +261,8 @@ public:
         boost::asio::co_spawn(
             *ioc_,
             [this, request, response, reactor]() -> boost::asio::awaitable<void> {
-                std::shared_ptr<ChatSession> target_session =
-                    std::dynamic_pointer_cast<ChatSession>(
-                        chat_server_->get_participant(request->touid()));
-                if (target_session) {
-                    auto notify_msg = NotifyAddFriendMsg{request->touid(), request->name()};
-                    target_session->deliver(
-                        MsgNode(magic_enum::enum_integer(MessageId::NotifyAddFriend),
-                                nlohmann::json(notify_msg).dump()));
-                } else {
-                    std::cout << "target session not found\n";
-                }
+                notify_session<message::AddFriendReq, NotifyAddFriendMsg>(
+                    request, request->touid(), MessageId::NotifyAddFriend);
 
                 response->set_error(0);
                 response->set_applyuid(request->applyuid());
@@ -271,17 +284,8 @@ public:
         boost::asio::co_spawn(
             *ioc_,
             [this, request, response, reactor]() -> boost::asio::awaitable<void> {
-                std::shared_ptr<ChatSession> target_session =
-                    std::dynamic_pointer_cast<ChatSession>(
-                        chat_server_->get_participant(request->touid()));
-                if (target_session) {
-                    auto notify_msg = NotifyAuthFriendMsg{request->fromuid(), request->touid()};
-                    target_session->deliver(
-                        MsgNode(magic_enum::enum_integer(MessageId::NotifyAuthFriend),
-                                nlohmann::json(notify_msg).dump()));
-                } else {
-                    std::cout << "target session not found\n";
-                }
+                notify_session<message::AuthFriendReq, NotifyAuthFriendMsg>(
+                    request, request->touid(), MessageId::NotifyAuthFriend);
 
                 response->set_error(0);
                 response->set_fromuid(request->fromuid());
@@ -303,17 +307,8 @@ public:
         boost::asio::co_spawn(
             *ioc_,
             [this, request, response, reactor]() -> boost::asio::awaitable<void> {
-                std::shared_ptr<ChatSession> target_session =
-                    std::dynamic_pointer_cast<ChatSession>(
-                        chat_server_->get_participant(request->touid()));
-                if (target_session) {
-                    auto notify_msg = NotifyTextChatMessage(*request);
-                    target_session->deliver(
-                        MsgNode(magic_enum::enum_integer(MessageId::NotifyTextChatMsg),
-                                nlohmann::json(notify_msg).dump()));
-                } else {
-                    std::cout << "target session not found\n";
-                }
+                notify_session<message::TextChatMsgReq, NotifyTextChatMessage>(
+                    request, request->touid(), MessageId::NotifyTextChatMsg);
 
                 response->set_error(0);
 

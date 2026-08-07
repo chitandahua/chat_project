@@ -316,8 +316,8 @@ awaitable<ChannelMessage> search_user(const MessageData& input) {
 
 class AddFriendRequest {
 public:
-    int64_t uid;
-    int64_t touid;
+    int64_t uid = 0;
+    int64_t touid = 0;
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(AddFriendRequest, uid, touid)
 };
@@ -361,7 +361,7 @@ asio::awaitable<ChannelMessage> add_friend(const MessageData& input) {
             co_return error_response(response_id, ServerError::Success);
         }
         // 发送notify消息
-        auto notify_msg = NotifyAddFriendMsg{request.value().uid, user_info.value().name};
+        auto notify_msg = NotifyAddFriendMsg(request.value().uid, user_info.value().name);
         target_session->deliver(MsgNode(magic_enum::enum_integer(MessageId::NotifyAddFriend),
                                         nlohmann::json(notify_msg).dump()));
     } else {
@@ -382,6 +382,13 @@ class AuthFriendRequest {
 public:
     int64_t fromuid;  // 认证方uid
     int64_t touid;    // 申请方uid
+
+    explicit operator NotifyAuthFriendMsg() const {
+        NotifyAuthFriendMsg notify_msg;
+        notify_msg.fromuid = fromuid;
+        notify_msg.touid = touid;
+        return notify_msg;
+    }
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(AuthFriendRequest, fromuid, touid)
 };
@@ -431,7 +438,7 @@ asio::awaitable<ChannelMessage> auth_friend(const MessageData& input) {
         //}
 
         // 发送notify消息
-        auto notify_msg = NotifyAuthFriendMsg{request.value().fromuid, request.value().touid};
+        auto notify_msg = static_cast<NotifyAuthFriendMsg>(request.value());
         target_session->deliver(MsgNode(magic_enum::enum_integer(MessageId::NotifyAuthFriend),
                                         nlohmann::json(notify_msg).dump()));
     } else {
