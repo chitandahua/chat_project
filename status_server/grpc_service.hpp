@@ -22,6 +22,7 @@ enum class GrpcErrorCode : uint8_t {
     SUCCESS = 0,
     INVALID_UID_OR_TOKEN = 1,
 };
+static const char* const UserTokenPrefix = "user_token_";
 
 class StatusServiceImpl final : public message::StatusService::CallbackService {
 public:
@@ -43,15 +44,17 @@ public:
                 auto index = co_await get_server_index();
                 std::cout << "choose server index: " << index << "\n";
 
-                response->set_host(chat_servers_[index].host);
-                response->set_port(chat_servers_[index].port);
-                // TODO 超时清理 or 直接保存到redis中
+                // TODO 超时清理？ SETEX？
                 auto token = boost::uuids::to_string(boost::uuids::random_generator()());
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    user_token_[request->uid()] = token;
+                auto key = std::string(UserTokenPrefix) + std::to_string(request->uid());
+                auto result = co_await redis_client_->set(key, token);
+                if (!result) {
+                    response->set_error(1);
+                } else {
+                    response->set_host(chat_servers_[index].host);
+                    response->set_port(chat_servers_[index].port);
+                    response->set_token(token);
                 }
-                response->set_token(boost::uuids::to_string(boost::uuids::random_generator()()));
 
                 reactor->Finish(grpc::Status::OK);
                 co_return;
@@ -69,23 +72,15 @@ public:
         boost::asio::co_spawn(
             *ioc_,
             [this, request, response, reactor]() -> boost::asio::awaitable<void> {
-                std::string token;
-                bool found = false;
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    auto it = user_token_.find(request->uid());
-                    if (it != user_token_.end()) {
-                        token = it->second;
-                        found = true;
-                    }
-                }
+                std::string key = std::string(UserTokenPrefix) + std::to_string(request->uid());
+                auto token = co_await redis_client_->get(key);
 
-                if (!found) {
+                if (!token) {
                     response->set_error(static_cast<int>(GrpcErrorCode::INVALID_UID_OR_TOKEN));
                 } else {
                     response->set_error(static_cast<int>(GrpcErrorCode::SUCCESS));
                     response->set_uid(request->uid());
-                    response->set_token(token);
+                    response->set_token(token.value());
                 }
 
                 reactor->Finish(grpc::Status::OK);
@@ -140,8 +135,6 @@ private:
     std::shared_ptr<boost::asio::io_context> ioc_;
     std::shared_ptr<RedisClient> redis_client_;
     std::vector<ServerConfig>& chat_servers_;
-    std::mutex mutex_;
-    std::map<int64_t, std::string> user_token_;
 };
 
 #endif

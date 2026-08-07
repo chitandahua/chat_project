@@ -247,15 +247,14 @@ asio::awaitable<ChannelMessage> login(const MessageData& input) {
     }
 
     auto uid = request.value().uid;
-    // TODO 改成直接从redis获取
-    // 从status grpc获取token
-    auto response = LoginServiceClient::get_login_token(
-        input.status_grpc_channel, LoginMsgRequest{uid, request.value().token});
-    if (!response || response.value().error() != 0) {
-        co_return error_response_and_close(response_id, ServerError::RPCFailed);
+    // 从redis获取token
+    auto key = std::string(UserTokenPrefix) + std::to_string(uid);
+    auto token = co_await input.redis_client->get(key);
+    if (!token) {
+        co_return error_response_and_close(response_id, ServerError::TokenInvalid);
     }
 
-    std::cout << "login response: " << response.value().token() << "\n";
+    std::cout << "login response: " << token.value() << "\n";
     // 从redis/数据库中获取UserInfo
     std::optional<UserInfo> user_info;
     user_info = co_await search_user_by_type<int64_t>(input, uid);
@@ -280,8 +279,8 @@ asio::awaitable<ChannelMessage> login(const MessageData& input) {
     // TODO 两次查询合一？
     auto apply_list = co_await FriendApplyRepo(input.mysql_pool).get_friend_applies(uid);
     auto friend_list = co_await FriendRepo(input.mysql_pool).get_friends(uid);
-    UserLoginResponse login_response{uid, response.value().token(), user_info.value().name,
-                                     apply_list, friend_list};
+    UserLoginResponse login_response{uid, token.value(), user_info.value().name, apply_list,
+                                     friend_list};
 
     auto json_response = response_payload(nlohmann::json(login_response));
     std::cout << "login response: " << json_response.dump() << "\n";

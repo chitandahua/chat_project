@@ -69,9 +69,10 @@ struct enum_range<ServerError> {
 }  // namespace magic_enum::customize
 
 // 保存redis的key前缀
-static const char* UserLoginServerPrefix = "user_login_server_";
-static const char* UserUidInfoPrefix = "user_uid_info_";
-static const char* UserNameInfoPrefix = "user_name_info_";
-static const char* LoginCountKey = "login_count";
+static const char* const UserLoginServerPrefix = "user_login_server_";
+static const char* const UserUidInfoPrefix = "user_uid_info_";
+static const char* const UserNameInfoPrefix = "user_name_info_";
+static const char* const LoginCountKey = "login_count";
+static const char* const UserTokenPrefix = "user_token_";
 
 #endif
