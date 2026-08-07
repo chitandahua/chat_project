@@ -125,11 +125,11 @@ http::response<http::string_body> nlohmann_json_response(const T& body) {
     return res;
 }
 
-http::response<http::string_body> nlohmann_json_response(nlohmann::json&& body) {
+http::response<http::string_body> nlohmann_json_response(const nlohmann::json& body) {
     http::response<http::string_body> res;
 
     res.set("Content-Type", "application/json");
-    res.body() = std::move(body.dump());
+    res.body() = body.dump();
     res.prepare_payload();
     return res;
 }
@@ -161,7 +161,8 @@ http::response<http::string_body> response_from_db_error(boost::system::error_co
 
 // Contains data associated to an HTTP request.
 // To be passed to individual handler functions
-struct RequestData {
+class RequestData {
+public:
     const http::request<http::string_body>& request;
     boost::urls::url_view target;
 

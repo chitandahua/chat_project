@@ -8,7 +8,6 @@
 
 using mailio::dialog_error;
 using mailio::mail_address;
-using mailio::message;
 using mailio::smtp;
 using mailio::smtp_error;
 
@@ -19,7 +18,7 @@ public:
     int send_mail(const std::string& to, const std::string& subject, const std::string& body) {
         try {
             // create mail message
-            message msg;
+            mailio::message msg;
             msg.from(mail_address("mailio library",
                                   "mailio@gmail.com"));  // set the correct sender name and address
             msg.add_recipient(mail_address("",
