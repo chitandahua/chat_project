@@ -8,10 +8,15 @@
 #include "config.hpp"
 #include "server.hpp"
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
+        if (argc != 2) {
+            std::cerr << "Usage: " << argv[0] << " <config file>" << std::endl;
+            return -1;
+        }
+
         Config config;
-        if (config.init() < 0) {
+        if (config.init(argv[1]) != 0) {
             return -1;
         }
         tcp::endpoint endpoint(boost::asio::ip::make_address(config.server_config.host),

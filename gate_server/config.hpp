@@ -73,8 +73,7 @@ public:
 };
 
 class Config {
-    bool read_config() {
-        std::string path = "../config/gate_server.toml";
+    bool read_config(const char* path) {
         auto config = toml::parse_file(path);
 
         if (!server_config.from_toml(config, "server") || !server_config.valid()) {
@@ -101,8 +100,8 @@ class Config {
     }
 
 public:
-    int init() {
-        if (!read_config()) {
+    int init(const char* path) {
+        if (!read_config(path)) {
             std::cerr << "read config error" << "\n";
             return -1;
         }

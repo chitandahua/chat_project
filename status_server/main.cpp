@@ -22,9 +22,14 @@ using grpc::Status;
 
 int main(int argc, char** argv) {
     try {
+        if (argc != 2) {
+            std::cerr << "Usage: " << argv[0] << " <config file>" << std::endl;
+            return -1;
+        }
+
         // config
         StatusConfig config;
-        if (0 != config.init("../config/status_server.json")) {
+        if (0 != config.init(argv[1])) {
             return -1;
         }
 
