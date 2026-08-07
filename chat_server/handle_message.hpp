@@ -25,7 +25,20 @@ class MessageData;
 class ChatSession;
 class RedisClient;
 
-using RequestHandler = std::function<asio::awaitable<MsgNode>(const MessageData&)>;
+class ChannelMessage {
+public:
+    ChannelMessage() = default;
+    explicit ChannelMessage(const MsgNode& msg_node) : msg(std::make_shared<MsgNode>(msg_node)) {}
+    explicit ChannelMessage(MsgNode&& msg_node)
+        : msg(std::make_shared<MsgNode>(std::move(msg_node))) {}
+    ChannelMessage(MsgNode&& msg_node, bool close)
+        : msg(std::make_shared<MsgNode>(std::move(msg_node))), close_after_send(close) {}
+
+    std::shared_ptr<MsgNode> msg;
+    bool close_after_send = false;  // 这条消息发完之后,是否要关闭连接
+};
+
+using RequestHandler = std::function<asio::awaitable<ChannelMessage>(const MessageData&)>;
 
 class MessageHandler {
 public:
@@ -33,8 +46,8 @@ public:
                    std::shared_ptr<mysql::connection_pool>& pool);
 
     int init(const ChatConfig& config);
-    asio::awaitable<MsgNode> handle_message(std::shared_ptr<ChatSession> session,
-                                            const MsgNode& msg);
+    asio::awaitable<ChannelMessage> handle_message(std::shared_ptr<ChatSession> session,
+                                                   const MsgNode& msg);
 
 private:
     void handlers_init();

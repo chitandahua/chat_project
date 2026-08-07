@@ -54,6 +54,7 @@ enum class ServerError : uint16_t {
     InternalError,
     UserNotFound,
     UserUidInvalid,
+    NotAuthenticated,
 };
 
 namespace magic_enum::customize {

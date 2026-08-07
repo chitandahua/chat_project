@@ -38,7 +38,8 @@ namespace redis = boost::redis;
 namespace http = boost::beast::http;
 using namespace std::chrono_literals;
 
-struct MessageData {
+class MessageData {
+public:
     const MsgNode& msg;
 
     std::shared_ptr<ChatSession>& session;
@@ -54,25 +55,31 @@ MessageHandler::MessageHandler(std::shared_ptr<RedisClient>& redis_client,
                                std::shared_ptr<mysql::connection_pool>& pool)
     : redis_client_(redis_client), mysql_pool_(pool), user_repositoty_(pool) {}
 
-MsgNode empty_response(const MsgNode& msg) {
-    return MsgNode(msg.id(), nullptr);
+ChannelMessage empty_response(const MsgNode& msg) {
+    return ChannelMessage(MsgNode(msg.id(), nullptr));
 }
 
-MsgNode empty_response(int response_id) {
-    return MsgNode(response_id, nullptr);
+ChannelMessage empty_response(int response_id) {
+    return ChannelMessage(MsgNode(response_id, nullptr));
 }
 
-MsgNode message_response(int response_id, nlohmann::json&& response = nlohmann::json()) {
+ChannelMessage message_response(int response_id, nlohmann::json&& response = nlohmann::json()) {
     response["error"] = magic_enum::enum_integer(ServerError::Success);
     response["message"] = magic_enum::enum_name(ServerError::Success);
-    return MsgNode(response_id, response.dump());
+    return ChannelMessage(MsgNode(response_id, response.dump()));
 }
 
-MsgNode error_response(int response_id, ServerError error) {
+ChannelMessage error_response(int response_id, ServerError error) {
     nlohmann::json response;
     response["error"] = magic_enum::enum_integer(error);
     response["message"] = magic_enum::enum_name(error);
-    return MsgNode(response_id, response.dump());
+    return ChannelMessage(MsgNode(response_id, response.dump()));
+}
+
+ChannelMessage error_response_and_close(int response_id, ServerError error) {
+    auto msg = error_response(response_id, error);
+    msg.close_after_send = true;
+    return msg;
 }
 
 // TODO 放到公共库
@@ -232,11 +239,11 @@ public:
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserLoginResponse, uid, token, name, apply_list, friend_list)
 };
 
-asio::awaitable<MsgNode> login(const MessageData& input) {
+asio::awaitable<ChannelMessage> login(const MessageData& input) {
     auto response_id = magic_enum::enum_integer(MessageId::LoginResponse);
     auto request = nlohmann_parse_json<UserLoginRequest>(input.msg.body());
     if (!request) {
-        co_return error_response(response_id, ServerError::InvalidJson);
+        co_return error_response_and_close(input.msg.id(), ServerError::InvalidJson);
     }
 
     auto uid = request.value().uid;
@@ -245,7 +252,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     auto response = LoginServiceClient::get_login_token(
         input.status_grpc_channel, LoginMsgRequest{uid, request.value().token});
     if (!response || response.value().error() != 0) {
-        co_return error_response(response_id, ServerError::RPCFailed);
+        co_return error_response_and_close(response_id, ServerError::RPCFailed);
     }
 
     std::cout << "login response: " << response.value().token() << "\n";
@@ -253,7 +260,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     std::optional<UserInfo> user_info;
     user_info = co_await search_user_by_type<int64_t>(input, uid);
     if (!user_info) {
-        co_return error_response(response_id, ServerError::InternalError);
+        co_return error_response_and_close(response_id, ServerError::InternalError);
     }
 
     std::cout << "user info: " << user_info.value().name << "\n";
@@ -266,6 +273,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     // session更新uid
     std::cout << "update session uid: " << uid << "\n";
     input.session->set_uid(uid);
+    input.session->mark_authenticated();
     // 为用户设置登录ip server的名字 redis SET uid映射server name
     (void)co_await set_user_login_server(input.redis_client, uid, input.session->server()->name());
 
@@ -280,7 +288,7 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     co_return MsgNode(response_id, json_response.dump());
 }
 
-awaitable<MsgNode> search_user(const MessageData& input) {
+awaitable<ChannelMessage> search_user(const MessageData& input) {
     auto response_id = magic_enum::enum_integer(MessageId::SearchUserResponse);
     nlohmann::json request;
     try {
@@ -298,10 +306,10 @@ awaitable<MsgNode> search_user(const MessageData& input) {
             co_await search_user_by_type<std::string>(input, request["name"].get<std::string>());
     }
 
-    std::optional<MsgNode> response_msg;
+    std::optional<ChannelMessage> response_msg;
     if (response) {
-        response_msg =
-            MsgNode(response_id, boost::json::serialize(boost::json::value_from(response.value())));
+        response_msg = ChannelMessage(MsgNode(
+            response_id, boost::json::serialize(boost::json::value_from(response.value()))));
     }
     co_return response_msg.value_or(error_response(response_id, ServerError::UserNotFound));
 }
@@ -314,7 +322,7 @@ public:
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(AddFriendRequest, uid, touid)
 };
 
-asio::awaitable<MsgNode> add_friend(const MessageData& input) {
+asio::awaitable<ChannelMessage> add_friend(const MessageData& input) {
     auto response_id = magic_enum::enum_integer(MessageId::AddFriendResponse);
     auto request = nlohmann_parse_json<AddFriendRequest>(input.msg.body());
     if (!request) {
@@ -378,7 +386,7 @@ public:
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(AuthFriendRequest, fromuid, touid)
 };
 
-asio::awaitable<MsgNode> auth_friend(const MessageData& input) {
+asio::awaitable<ChannelMessage> auth_friend(const MessageData& input) {
     auto response_id = magic_enum::enum_integer(MessageId::AuthFriendResponse);
 
     auto request = nlohmann_parse_json<AuthFriendRequest>(input.msg.body());
@@ -458,8 +466,14 @@ void log_mysql_error(boost::system::error_code ec, const mysql::diagnostics& dia
     std::cerr << std::endl;
 }
 
-asio::awaitable<MsgNode> MessageHandler::handle_message(std::shared_ptr<ChatSession> session,
-                                                        const MsgNode& msg) {
+asio::awaitable<ChannelMessage> MessageHandler::handle_message(std::shared_ptr<ChatSession> session,
+                                                               const MsgNode& msg) {
+    // 除了登录消息本身,其他消息一律要求先登录过
+    if (!session->is_authenticated() &&
+        msg.id() != magic_enum::enum_integer(MessageId::LoginRequest)) {
+        co_return error_response_and_close(msg.id(), ServerError::NotAuthenticated);
+    }
+
     auto message_id = magic_enum::enum_cast<MessageId>(msg.id());
     if (!message_id) {
         co_return empty_response(msg);

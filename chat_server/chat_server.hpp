@@ -26,8 +26,8 @@ using asio::ip::tcp;
 class ChatParticipant {
 public:
     virtual ~ChatParticipant() {}
-    virtual void deliver(const MsgNode& msg) = 0;
-    virtual void deliver(MsgNode&& msg) = 0;
+    virtual void deliver(const ChannelMessage& msg) = 0;
+    virtual void deliver(ChannelMessage&& msg) = 0;
     virtual int64_t uid() = 0;
 };
 
@@ -76,12 +76,21 @@ private:
 class ChatSession : public ChatParticipant, public std::enable_shared_from_this<ChatSession> {
 public:
     ChatSession(tcp::socket socket, const std::shared_ptr<ChatServer>& server)
-        : socket_(std::move(socket)), server_(server), channel_(socket_.get_executor(), 64) {}
+        : socket_(std::move(socket)),
+          server_(server),
+          channel_(socket_.get_executor(), 64),
+          login_deadline_(socket_.get_executor()) {}
 
     void start(std::shared_ptr<MessageHandler>& handler) {
         if (auto server = server_.lock()) {
             server->join(shared_from_this());
         }
+
+        // 未登录状态的超时保护:10 秒内必须完成登录,否则强制断开
+        login_deadline_.expires_after(std::chrono::seconds(10));
+        co_spawn(
+            socket_.get_executor(),
+            [self = shared_from_this()] { return self->check_login_deadline(); }, detached);
 
         co_spawn(
             socket_.get_executor(),
@@ -93,19 +102,22 @@ public:
             detached);
     }
 
-    void deliver(const MsgNode& msg) override {
-        std::cout << "deliver msg id=" << msg.id() << " length=" << msg.length()
-                  << " body=" << msg.body() << "\n";
-        bool ok = channel_.try_send(boost::system::error_code{}, std::make_shared<MsgNode>(msg));
+    void deliver(MsgNode&& msg) {
+        deliver(ChannelMessage(std::move(msg)));
+    }
+
+    void deliver(const ChannelMessage& msg) override {
+        std::cout << "deliver msg id=" << msg.msg->id() << " length=" << msg.msg->length()
+                  << " body=" << msg.msg->body() << "\n";
+        bool ok = channel_.try_send(boost::system::error_code{}, msg);
         if (!ok) {
             // 至少打个日志,方便排查是不是消费跟不上生产
             std::cerr << "channel full, message dropped for session\n";
         }
     }
 
-    void deliver(MsgNode&& msg) override {
-        bool ok = channel_.try_send(boost::system::error_code{},
-                                    std::make_shared<MsgNode>(std::move(msg)));
+    void deliver(ChannelMessage&& msg) override {
+        bool ok = channel_.try_send(boost::system::error_code{}, std::move(msg));
         if (!ok) {
             // 至少打个日志,方便排查是不是消费跟不上生产
             std::cerr << "channel full, message dropped for session\n";
@@ -124,7 +136,30 @@ public:
         return server_.lock();
     }
 
+    bool is_authenticated() const {
+        return is_authenticated_;
+    }
+
+    // 登录成功时调用:标记已登录 + 取消登录超时保护
+    void mark_authenticated() {
+        is_authenticated_ = true;
+        login_deadline_.cancel();
+    }
+
 private:
+    awaitable<void> check_login_deadline() {
+        boost::system::error_code ec;
+        co_await login_deadline_.async_wait(redirect_error(use_awaitable, ec));
+        if (ec == boost::asio::error::operation_aborted) {
+            co_return;  // 被 cancel() 打断,说明登录成功了(或者连接已经在别处被关闭),不用处理
+        }
+        // 真超时,还没登录,强制断开
+        if (!is_authenticated_) {
+            std::cerr << "session " << (void*)this << " login timeout, closing\n";
+            stop();
+        }
+    }
+
     awaitable<void> reader(const std::shared_ptr<MessageHandler>& handler) {
         try {
             for (MsgNode read_msg;;) {
@@ -163,9 +198,13 @@ private:
     awaitable<void> writer() {
         try {
             for (;;) {
-                auto msg = co_await channel_.async_receive(use_awaitable);
-                co_await asio::async_write(socket_, asio::buffer(msg->data(), msg->length()),
-                                           use_awaitable);
+                auto out = co_await channel_.async_receive(use_awaitable);
+                co_await asio::async_write(
+                    socket_, asio::buffer(out.msg->data(), out.msg->length()), use_awaitable);
+                if (out.close_after_send) {
+                    stop();
+                    co_return;
+                }
             }
         } catch (std::exception&) {
             stop();
@@ -173,6 +212,7 @@ private:
     }
 
     void stop() {
+        login_deadline_.cancel();  // 兜底:任何路径触发 stop,都顺手取消掉登录超时的挂起等待
         if (auto server = server_.lock()) {
             server->leave(shared_from_this());
         }
@@ -181,10 +221,11 @@ private:
 
     tcp::socket socket_;
     std::weak_ptr<ChatServer> server_;
-    asio::experimental::concurrent_channel<void(boost::system::error_code,
-                                                std::shared_ptr<MsgNode>)>
+    asio::experimental::concurrent_channel<void(boost::system::error_code, ChannelMessage)>
         channel_;
     int64_t uid_;
+    bool is_authenticated_ = false;
+    asio::steady_timer login_deadline_;
 };
 
 #endif
