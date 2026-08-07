@@ -23,32 +23,9 @@
 
 #include "nlohmann/json.hpp"
 
+#include "types.hpp"
+
 namespace mysql = boost::mysql;
-
-struct UserInfo {
-    int64_t id;
-    std::string name;
-    std::string email;
-    std::string pwd;
-};
-BOOST_DESCRIBE_STRUCT(UserInfo, (), (id, name, email, pwd))
-
-class UserLoginRequest {
-public:
-    int64_t uid;
-    std::string token;
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserLoginRequest, uid, token)
-};
-
-class UserLoginResponse {
-public:
-    int64_t uid;
-    std::string token;
-    std::string name;
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserLoginResponse, uid, token, name)
-};
 
 class UserRepo {
 public:

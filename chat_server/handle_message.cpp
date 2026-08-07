@@ -213,6 +213,25 @@ asio::awaitable<bool> update_login_count(std::shared_ptr<RedisClient>& redis_cli
     co_return true;
 }
 
+class UserLoginRequest {
+public:
+    int64_t uid;
+    std::string token;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserLoginRequest, uid, token)
+};
+
+class UserLoginResponse {
+public:
+    int64_t uid;
+    std::string token;
+    std::string name;
+    std::vector<FriendApplyInfo> apply_list;
+    std::vector<FriendInfo> friend_list;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UserLoginResponse, uid, token, name, apply_list, friend_list)
+};
+
 asio::awaitable<MsgNode> login(const MessageData& input) {
     auto response_id = magic_enum::enum_integer(MessageId::LoginResponse);
     auto request = nlohmann_parse_json<UserLoginRequest>(input.msg.body());
@@ -250,7 +269,12 @@ asio::awaitable<MsgNode> login(const MessageData& input) {
     // 为用户设置登录ip server的名字 redis SET uid映射server name
     (void)co_await set_user_login_server(input.redis_client, uid, input.session->server()->name());
 
-    UserLoginResponse login_response{uid, response.value().token(), user_info.value().name};
+    // TODO 两次查询合一？
+    auto apply_list = co_await FriendApplyRepo(input.mysql_pool).get_friend_applies(uid);
+    auto friend_list = co_await FriendRepo(input.mysql_pool).get_friends(uid);
+    UserLoginResponse login_response{uid, response.value().token(), user_info.value().name,
+                                     apply_list, friend_list};
+
     auto json_response = response_payload(nlohmann::json(login_response));
     std::cout << "login response: " << json_response.dump() << "\n";
     co_return MsgNode(response_id, json_response.dump());

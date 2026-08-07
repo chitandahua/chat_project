@@ -22,18 +22,13 @@
 
 #include "nlohmann/json.hpp"
 
-namespace mysql = boost::mysql;
+#include "types.hpp"
 
-struct FriendApply {
-    int64_t from_uid;
-    int64_t to_uid;
-};
-BOOST_DESCRIBE_STRUCT(FriendApply, (), (from_uid, to_uid))
+namespace mysql = boost::mysql;
 
 class FriendApplyRepo {
 public:
-    FriendApplyRepo(mysql::connection_pool& pool)
-        : pool_(pool) {}  // user_infos_(std::make_shared<std::map<int64_t, UserInfo>>())
+    explicit FriendApplyRepo(mysql::connection_pool& pool) : pool_(pool) {}
 
     auto add_friend_apply(const FriendApply& req) const -> boost::asio::awaitable<bool> {
         auto conn = co_await pool_.async_get_connection();
@@ -65,6 +60,71 @@ public:
 
         conn.return_without_reset();
         co_return true;
+    }
+
+    awaitable<std::vector<FriendApplyInfo>> get_friend_applies(int64_t to_uid) {
+        auto conn = co_await pool_.async_get_connection();
+
+        boost::mysql::static_results<FriendApplyRow> result;
+        co_await conn->async_execute(
+            boost::mysql::with_params("SELECT fa.status AS status, u.name AS name "
+                                      "FROM friend_apply fa JOIN user u ON u.id = fa.from_uid "
+                                      "WHERE fa.to_uid = {}",
+                                      to_uid),
+            result);
+
+        std::vector<FriendApplyInfo> list;
+        list.reserve(result.rows().size());
+        for (auto& row : result.rows()) {
+            list.push_back(FriendApplyInfo(row));
+        }
+        co_return list;
+    }
+
+    awaitable<std::vector<FriendInfo>> get_friends(int64_t self_id) {
+        auto conn = co_await pool_.async_get_connection();
+
+        boost::mysql::static_results<FriendRow> result;
+        co_await conn->async_execute(
+            boost::mysql::with_params("SELECT f.back AS back, u.name AS name "
+                                      "FROM friend f JOIN user u ON u.id = f.friend_id "
+                                      "WHERE f.self_id = {}",
+                                      self_id),
+            result);
+
+        std::vector<FriendInfo> list;
+        list.reserve(result.rows().size());
+        for (auto& row : result.rows()) {
+            list.push_back(FriendInfo(row));
+        }
+        co_return list;
+    }
+
+private:
+    mysql::connection_pool& pool_;
+};
+
+class FriendRepo {
+public:
+    explicit FriendRepo(mysql::connection_pool& pool) : pool_(pool) {}
+
+    awaitable<std::vector<FriendInfo>> get_friends(int64_t self_id) {
+        auto conn = co_await pool_.async_get_connection();
+
+        boost::mysql::static_results<FriendRow> result;
+        co_await conn->async_execute(
+            boost::mysql::with_params("SELECT f.back AS back, u.name AS name "
+                                      "FROM friend f JOIN user u ON u.id = f.friend_id "
+                                      "WHERE f.self_id = {}",
+                                      self_id),
+            result);
+
+        std::vector<FriendInfo> list;
+        list.reserve(result.rows().size());
+        for (auto& row : result.rows()) {
+            list.push_back(FriendInfo(row));
+        }
+        co_return list;
     }
 
 private:
