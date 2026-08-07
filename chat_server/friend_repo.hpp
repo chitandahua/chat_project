@@ -49,7 +49,26 @@ public:
         co_return true;
     }
 
+    auto auth_friend_apply(const FriendApply& req) const -> boost::asio::awaitable<bool> {
+        auto conn = co_await pool_.async_get_connection();
+        mysql::static_results<std::tuple<>, std::tuple<>, std::tuple<>, std::tuple<>, std::tuple<>>
+            result;
+        co_await conn->async_execute(
+            mysql::with_params(
+                "START TRANSACTION;"
+                "UPDATE friend_apply SET status = 1 WHERE from_uid = {0} AND to_uid = {1};"
+                "INSERT IGNORE INTO friend (self_id, friend_id) VALUES ({0}, {1});"
+                "INSERT IGNORE INTO friend (self_id, friend_id) VALUES ({1}, {0});"
+                "COMMIT;",
+                req.from_uid, req.to_uid),
+            result);
+
+        conn.return_without_reset();
+        co_return true;
+    }
+
 private:
     mysql::connection_pool& pool_;
 };
+
 #endif

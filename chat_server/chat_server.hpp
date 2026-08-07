@@ -59,7 +59,7 @@ public:
 
     std::shared_ptr<ChatParticipant> get_participant(int64_t uid) {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (auto& participant : participants_) {
+        for (const auto& participant : participants_) {
             if (participant->uid() == uid) {
                 return participant;
             }

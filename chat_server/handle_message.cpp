@@ -329,7 +329,7 @@ asio::awaitable<MsgNode> add_friend(const MessageData& input) {
             co_return error_response(response_id, ServerError::Success);
         }
         // 发送notify消息
-        auto notify_msg = NotifyAddFriendRequest{request.value().uid, user_info.value().name};
+        auto notify_msg = NotifyAddFriendMsg{request.value().uid, user_info.value().name};
         target_session->deliver(MsgNode(magic_enum::enum_integer(MessageId::NotifyAddFriend),
                                         nlohmann::json(notify_msg).dump()));
     } else {
@@ -343,6 +343,80 @@ asio::awaitable<MsgNode> add_friend(const MessageData& input) {
             co_return error_response(input.msg.id(), ServerError::RPCFailed);
         }
     }
+    co_return message_response(response_id);
+}
+
+class AuthFriendRequest {
+public:
+    int64_t fromuid;  // 认证方uid
+    int64_t touid;    // 申请方uid
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(AuthFriendRequest, fromuid, touid)
+};
+
+asio::awaitable<MsgNode> auth_friend(const MessageData& input) {
+    auto response_id = magic_enum::enum_integer(MessageId::AuthFriendResponse);
+
+    auto request = nlohmann_parse_json<AuthFriendRequest>(input.msg.body());
+    if (!request) {
+        co_return error_response(response_id, ServerError::InvalidJson);
+    } else if (  // TODO 解注释 当前注释掉只是为了方便测试
+                 // request.value().fromuid != input.session->uid() ||
+        request.value().fromuid == request.value().touid) {
+        co_return error_response(response_id, ServerError::UserUidInvalid);
+    }
+
+    std::cout << "user " << request.value().fromuid << " auth friend " << request.value().touid
+              << "\n";
+
+    // 更新数据库 记录好友申请已通过以及记录friend信息
+    (void)co_await FriendApplyRepo(input.mysql_pool)
+        .auth_friend_apply(FriendApply{request.value().fromuid, request.value().touid});
+
+    // 告知to_uid from_uid已通过to_uid的好友申请
+    // 若to_uid本机连接 则直接notify 否则通过grpc发送notify
+
+    // redis查询to_uid是否登录某个chat_server
+    auto target_login_server =
+        co_await get_user_login_server(input.redis_client, request.value().touid);
+    if (!target_login_server) {  // 未登录直接返回
+        co_return error_response(response_id, ServerError::Success);
+    }
+
+    // 若to_uid登录的是当前chat_server 则直接发送notify消息
+    if (target_login_server.value() == input.session->server()->name()) {
+        std::cout << "send notify to " << target_login_server.value() << "\n";
+        std::shared_ptr<ChatSession> target_session = std::dynamic_pointer_cast<ChatSession>(
+            input.session->server()->get_participant(request.value().touid));
+        if (!target_session) {
+            std::cout << "session " << request.value().touid << " not found\n";
+            co_return error_response(response_id, ServerError::Success);
+        }
+        // 获取当前用户from_uid信息
+        // auto cur_user_info = co_await input.user_repo.get_user_info(request.value().from_uid);
+        // if (!cur_user_info) {
+        //    co_return error_response(response_id, ServerError::InternalError);
+        //}
+
+        // 发送notify消息
+        auto notify_msg = NotifyAuthFriendMsg{request.value().fromuid, request.value().touid};
+        target_session->deliver(MsgNode(magic_enum::enum_integer(MessageId::NotifyAuthFriend),
+                                        nlohmann::json(notify_msg).dump()));
+    } else {
+        // 否则通过grpc将当前用户信息+好友请求信息 发送给该chat_server
+        std::cout << "send grpc notify to " << target_login_server.value() << "\n";
+        auto response = ChatServiceClient::notify_auth_friend(
+            input.peer_grpc_channel,
+            GrpcAuthFriendRequest{request.value().fromuid, request.value().touid});
+        if (!response) {
+            co_return error_response(input.msg.id(), ServerError::RPCFailed);
+        }
+    }
+    // TODO 获取原好友请求用户(to_uid)信息 携带返回
+    // auto user_info = co_await input.user_repo.get_user_info(request.value().to_uid);
+    // if (!user_info) {
+    //    co_return error_response(response_id, ServerError::InternalError);
+    //}
     co_return message_response(response_id);
 }
 
@@ -419,4 +493,5 @@ void MessageHandler::handlers_init() {
     handlers_.insert({MessageId::LoginRequest, login});
     handlers_.insert({MessageId::SearchUserRequest, search_user});
     handlers_.insert({MessageId::AddFriendRequest, add_friend});
+    handlers_.insert({MessageId::AuthFriendRequest, auth_friend});
 }
