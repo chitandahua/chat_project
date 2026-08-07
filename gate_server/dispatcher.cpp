@@ -64,6 +64,7 @@ http::response<http::string_body> error_response(http::status code, std::string_
     http::response<http::string_body> res;
     res.result(code);
     res.body() = msg;
+    res.prepare_payload();
     return res;
 }
 
@@ -87,7 +88,7 @@ http::response<http::string_body> json_response(const T& body) {
 
     res.set("Content-Type", "application/json");
     res.body() = boost::json::serialize(boost::json::value_from(body));
-
+    res.prepare_payload();
     return res;
 }
 
@@ -120,7 +121,7 @@ http::response<http::string_body> nlohmann_json_response(const T& body) {
 
     res.set("Content-Type", "application/json");
     res.body() = nlohmann::json(body).dump();
-
+    res.prepare_payload();
     return res;
 }
 
@@ -129,7 +130,7 @@ http::response<http::string_body> nlohmann_json_response(nlohmann::json&& body) 
 
     res.set("Content-Type", "application/json");
     res.body() = std::move(body.dump());
-
+    res.prepare_payload();
     return res;
 }
 
@@ -188,6 +189,7 @@ asio::awaitable<http::response<http::string_body>> get_test(const RequestData& i
     res.result(http::status::ok);
     res.set(http::field::content_type, "text/plain");
     res.body() = ostream.str();
+    res.prepare_payload();
     co_return res;
 }
 
