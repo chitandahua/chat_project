@@ -250,7 +250,7 @@ asio::awaitable<ChannelMessage> login(const MessageData& input) {
     // 从redis获取token
     auto key = std::string(UserTokenPrefix) + std::to_string(uid);
     auto token = co_await input.redis_client->get(key);
-    if (!token) {
+    if (!token || token.value() != request.value().token) {
         co_return error_response_and_close(response_id, ServerError::TokenInvalid);
     }
 

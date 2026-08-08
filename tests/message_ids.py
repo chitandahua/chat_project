@@ -1,0 +1,20 @@
+"""
+消息 id 常量,跟 chat_server/message_common.hpp 里的 MessageId 枚举保持一致。
+已跟你确认过 AuthFriendRequest 是 1013(以 message_common.hpp 为准,不是 desc.md 里
+示例误写的 1012),这里的定义已经是最终版本,跟 message_common.hpp 完全对齐。
+"""
+
+LOGIN_REQUEST = 1005
+LOGIN_RESPONSE = 1006
+SEARCH_USER_REQUEST = 1007
+SEARCH_USER_RESPONSE = 1008
+ADD_FRIEND_REQUEST = 1009
+ADD_FRIEND_RESPONSE = 1010
+NOTIFY_ADD_FRIEND = 1011
+AUTH_FRIEND_REQUEST = 1013
+AUTH_FRIEND_RESPONSE = 1014
+NOTIFY_AUTH_FRIEND = 1015
+TEXT_CHAT_MSG_REQ = 1017
+TEXT_CHAT_MSG_RSP = 1018
+NOTIFY_TEXT_CHAT_MSG = 1019
+INVALID_REQUEST = 1500
