@@ -517,7 +517,7 @@ asio::awaitable<ChannelMessage> text_chat_msg(const MessageData& input) {
 
         // 发送notify消息
         auto notify_msg = static_cast<NotifyTextChatMessage>(request.value());
-        target_session->deliver(MsgNode(magic_enum::enum_integer(MessageId::NotifyAuthFriend),
+        target_session->deliver(MsgNode(magic_enum::enum_integer(MessageId::NotifyTextChatMsg),
                                         nlohmann::json(notify_msg).dump()));
     } else {
         // 否则通过grpc将信息 发送给该chat_server

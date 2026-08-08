@@ -162,7 +162,8 @@ private:
 
     awaitable<void> reader(const std::shared_ptr<MessageHandler>& handler) {
         try {
-            for (MsgNode read_msg;;) {
+            for (;;) {
+                MsgNode read_msg;
                 auto read_len = co_await asio::async_read(
                     socket_, boost::asio::buffer(read_msg.data(), MsgNode::PREFIX_LEN),
                     use_awaitable);
