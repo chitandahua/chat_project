@@ -1,0 +1,7 @@
+# search_user.txt —— 搜索用户(消息 1007),登录后可执行
+# 按 uid 搜索
+1007|{"uid":3}
+# 按 name 搜索
+1007|{"name":"bbb"}
+# 不存在的 uid(预期返回 UserNotFound 错误)
+1007|{"uid":999999}

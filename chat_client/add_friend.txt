@@ -1,0 +1,4 @@
+# add_friend.txt —— 发送好友申请(消息 1009),需先登录
+# uid = 自己(登录的 uid),touid = 要加的好友
+# 当前示例:aaa(uid=1) 申请加 bbb(uid=3)
+1009|{"uid":1,"touid":3}

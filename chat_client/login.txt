@@ -1,0 +1,4 @@
+# login.txt —— 登录请求(消息 1005)
+# token 需先用 HTTP 登录换取,见 chat_client/README.md
+# 当前示例:用户 aaa(uid=1),token 需替换为 gate /user_login 返回的实时值
+1005|{"uid":1,"token":"df5d494d-d63f-4590-a6fa-36c5aec6cb4f"}

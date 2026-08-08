@@ -146,7 +146,8 @@ int main(int argc, char** argv) {
             if (interactive && line == "exit") {
                 break;
             }
-            if (line.empty()) {
+            // 跳过空行与注释行(以 # 开头),便于在请求文件里写说明
+            if (line.empty() || line[0] == '#') {
                 if (interactive)
                     std::cout << "> ";
                 continue;

@@ -1,0 +1,5 @@
+# friend_auth.txt —— 认证(同意)好友申请(消息 1013),需先登录
+# fromuid = 同意方(自己),touid = 申请方
+# 注意:消息 id 是 1013(desc.md 里误写的 1012 已废弃)
+# 当前示例:bbb(uid=3) 同意 aaa(uid=1) 的申请
+1013|{"fromuid":3,"touid":1}
