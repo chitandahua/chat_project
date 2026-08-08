@@ -72,7 +72,9 @@ public:
 
                     response->set_error(0);
                     response->set_email(email);
-                    response->set_code("just test");
+                    // 返回真实 code,方便测试环境直接把 code 填进注册表单
+                    // (正式环境应通过邮件发送,这里仅做回显)
+                    response->set_code(unique_id.value());
                 }
 
                 // 结果准备好了,这时候才真正通知 gRPC 这次 RPC 完成
