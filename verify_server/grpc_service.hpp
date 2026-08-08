@@ -4,8 +4,6 @@
 #include <grpcpp/grpcpp.h>
 #include <tl/expected.hpp>
 
-#include <thread>
-
 #include "mail_client.hpp"
 #include "redis_client.hpp"
 
@@ -67,15 +65,10 @@ public:
                     // ... 发邮件、设置正常响应 ...
                     std::string content =
                         std::string("您的验证码为") + unique_id.value() + "请三分钟内完成注册";
-                    // 邮件发送走独立线程,避免阻塞 verify 的 io_context(gRPC 回调跑在
-                    // 该 io_context 上,同步 SMTP 连接会卡住整个事件循环导致响应超时)。
-                    // 用已复制出的 email 字符串,不引用 request 指针(它可能已被释放)。
-                    std::string to_email = email;
-                    std::thread([to_email, content] {
-                        MailClient mail_client("127.0.0.1", 25);
-                        mail_client.send_mail(to_email, "verify code", content);
-                        mail_client.send_mail("chitanda@localhost", "verify code", content);
-                    }).detach();
+                    // send_mail 只是入队(MailClient 常驻 worker 线程串行投递),
+                    // 立即返回,不阻塞 verify 的 io_context。
+                    MailClient::instance().send_mail(email, "verify code", content);
+                    MailClient::instance().send_mail("chitanda@localhost", "verify code", content);
 
                     response->set_error(0);
                     response->set_email(email);

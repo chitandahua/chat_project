@@ -1,39 +1,93 @@
 #ifndef _MAIL_CLIENT_HPP_
 #define _MAIL_CLIENT_HPP_
 
+#include <condition_variable>
 #include <cstdio>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 
-// 用系统 sendmail(/usr/bin/mail)发信,通过 fork 外部进程完成投递。
-// 不用 mailio 库:mailio 0.26 的 dialog::connect 在 gRPC 已初始化的进程里
-// (verify_server)会段错误,而独立测试正常——库与 gRPC/OpenSSL 共存时不稳定。
+// 邮件投递:单一常驻 worker 线程 + 任务队列。
+// send_mail() 只把任务入队立即返回,绝不阻塞调用者(尤其不能阻塞 verify 的
+// io_context——gRPC 回调跑在上面)。实际投递由 worker 线程串行执行,通过
+// fork 系统 sendmail(/usr/bin/mail)完成,不使用 mailio(mailio 0.26 在
+// gRPC 已初始化的进程里 dialog::connect 会段错误)。
 class MailClient {
 public:
-    MailClient(const std::string& host, int port) : smtp_host_(host), smtp_port_(port) {}
+    static MailClient& instance() {
+        static MailClient mc;
+        return mc;
+    }
 
-    int send_mail(const std::string& to, const std::string& subject, const std::string& body) {
-        // 本地场景:系统 MTA(OpenSMTPD)固定投递,host/port 不再使用
-        (void)smtp_host_;
-        (void)smtp_port_;
-
-        std::string cmd =
-            "/usr/bin/mail -s " + shell_quote(subject) + " " + shell_quote(to) + " 2>/dev/null";
-        FILE* pipe = popen(cmd.c_str(), "w");
-        if (!pipe) {
-            fprintf(stderr, "[mail] popen failed for %s\n", to.c_str());
-            return -1;
+    // 入队一封邮件,立即返回。线程安全。
+    void send_mail(const std::string& to, const std::string& subject, const std::string& body) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            queue_.push_back({to, subject, body});
         }
-        fwrite(body.c_str(), 1, body.size(), pipe);
-        int rc = pclose(pipe);
-        if (rc != 0) {
-            fprintf(stderr, "[mail] send failed to %s rc=%d\n", to.c_str(), rc);
-            return -1;
-        }
-        fprintf(stderr, "[mail] ok to %s via sendmail\n", to.c_str());
-        return 0;
+        cv_.notify_one();
     }
 
 private:
+    struct Task {
+        std::string to;
+        std::string subject;
+        std::string body;
+    };
+
+    MailClient() {
+        worker_ = std::thread([this] { worker_loop(); });
+    }
+
+    ~MailClient() {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stop_ = true;
+        }
+        cv_.notify_one();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    MailClient(const MailClient&) = delete;
+    MailClient& operator=(const MailClient&) = delete;
+
+    void worker_loop() {
+        for (;;) {
+            Task task;
+            {
+                std::unique_lock<std::mutex> lock(mu_);
+                cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+                if (stop_ && queue_.empty()) {
+                    return;
+                }
+                task = std::move(queue_.front());
+                queue_.pop_front();
+            }
+            deliver(task);
+        }
+    }
+
+    void deliver(const Task& task) {
+        std::string cmd =
+            "/usr/bin/mail -s " + shell_quote(task.subject) + " " + shell_quote(task.to) +
+            " 2>/dev/null";
+        FILE* pipe = popen(cmd.c_str(), "w");
+        if (!pipe) {
+            fprintf(stderr, "[mail] popen failed for %s\n", task.to.c_str());
+            return;
+        }
+        fwrite(task.body.c_str(), 1, task.body.size(), pipe);
+        int rc = pclose(pipe);
+        if (rc != 0) {
+            fprintf(stderr, "[mail] send failed to %s rc=%d\n", task.to.c_str(), rc);
+            return;
+        }
+        fprintf(stderr, "[mail] ok to %s via sendmail\n", task.to.c_str());
+    }
+
     static std::string shell_quote(const std::string& s) {
         // 单引号包裹,内部的单引号转义为 '\'' 序列,防止 shell 注入
         std::string out = "'";
@@ -48,8 +102,11 @@ private:
         return out;
     }
 
-    std::string smtp_host_;
-    int smtp_port_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::deque<Task> queue_;
+    bool stop_ = false;
+    std::thread worker_;
 };
 
 #endif
