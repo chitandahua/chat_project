@@ -326,9 +326,8 @@ asio::awaitable<ChannelMessage> add_friend(const MessageData& input) {
     auto request = nlohmann_parse_json<AddFriendRequest>(input.msg.body());
     if (!request) {
         co_return error_response(response_id, ServerError::InvalidJson);
-    } else if (  // TODO 解注释 当前注释掉只是为了方便测试
-                 // request.value().uid != input.session->uid() ||
-        request.value().uid == request.value().touid) {
+    } else if (request.value().uid != input.session->uid() ||
+               request.value().uid == request.value().touid) {
         // uid必须为当前用户且目标uid不能为自己
         co_return error_response(response_id, ServerError::UserUidInvalid);
     }
@@ -398,9 +397,8 @@ asio::awaitable<ChannelMessage> auth_friend(const MessageData& input) {
     auto request = nlohmann_parse_json<AuthFriendRequest>(input.msg.body());
     if (!request) {
         co_return error_response(response_id, ServerError::InvalidJson);
-    } else if (  // TODO 解注释 当前注释掉只是为了方便测试
-                 // request.value().fromuid != input.session->uid() ||
-        request.value().fromuid == request.value().touid) {
+    } else if (request.value().fromuid != input.session->uid() ||
+               request.value().fromuid == request.value().touid) {
         co_return error_response(response_id, ServerError::UserUidInvalid);
     }
 
@@ -489,9 +487,8 @@ asio::awaitable<ChannelMessage> text_chat_msg(const MessageData& input) {
     auto request = nlohmann_parse_json<TextChatMsgRequest>(input.msg.body());
     if (!request) {
         co_return error_response(response_id, ServerError::InvalidJson);
-    } else if (  // TODO 解注释 当前注释掉只是为了方便测试
-                 // request.value().fromuid != input.session->uid() ||
-        request.value().fromuid == request.value().touid) {
+    } else if (request.value().fromuid != input.session->uid() ||
+               request.value().fromuid == request.value().touid) {
         co_return error_response(response_id, ServerError::UserUidInvalid);
     }
 

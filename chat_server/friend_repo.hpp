@@ -67,7 +67,8 @@ public:
 
         boost::mysql::static_results<FriendApplyRow> result;
         co_await conn->async_execute(
-            boost::mysql::with_params("SELECT fa.status AS status, u.name AS name "
+            boost::mysql::with_params("SELECT fa.status AS status, fa.from_uid AS from_uid, "
+                                      "u.name AS name "
                                       "FROM friend_apply fa JOIN user u ON u.id = fa.from_uid "
                                       "WHERE fa.to_uid = {}",
                                       to_uid),
@@ -86,7 +87,8 @@ public:
 
         boost::mysql::static_results<FriendRow> result;
         co_await conn->async_execute(
-            boost::mysql::with_params("SELECT f.back AS back, u.name AS name "
+            boost::mysql::with_params("SELECT f.friend_id AS friend_id, f.back AS back, "
+                                      "u.name AS name "
                                       "FROM friend f JOIN user u ON u.id = f.friend_id "
                                       "WHERE f.self_id = {}",
                                       self_id),
@@ -113,7 +115,8 @@ public:
 
         boost::mysql::static_results<FriendRow> result;
         co_await conn->async_execute(
-            boost::mysql::with_params("SELECT f.back AS back, u.name AS name "
+            boost::mysql::with_params("SELECT f.friend_id AS friend_id, f.back AS back, "
+                                      "u.name AS name "
                                       "FROM friend f JOIN user u ON u.id = f.friend_id "
                                       "WHERE f.self_id = {}",
                                       self_id),

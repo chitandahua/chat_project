@@ -30,6 +30,10 @@ inline MessageId get_response_id(MessageId id) {
             return MessageId::SearchUserResponse;
         case MessageId::AddFriendRequest:
             return MessageId::AddFriendResponse;
+        case MessageId::AuthFriendRequest:
+            return MessageId::AuthFriendResponse;
+        case MessageId::TextChatMsgReq:
+            return MessageId::TextChatMsgRsp;
         default:
             return MessageId::InvalidRequest;
     }
